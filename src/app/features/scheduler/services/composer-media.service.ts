@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpParams } from '@angular/common/http';
+import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Observable, throwError } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 
@@ -55,6 +55,15 @@ export interface MediaLibraryItemDto {
   lastUsedAt?: string;
   tags?: string[];
   sizeBytes?: number;
+}
+
+/** Detalle por id (`GET /api/media/{id}`) — alineado con `MediaDetailDto` del API. */
+export interface MediaDetailDto extends MediaLibraryItemDto {
+  tenantId?: number;
+  createdByUserId?: number;
+  width?: number | null;
+  height?: number | null;
+  updatedAt?: string | null;
 }
 
 /** Valores de `sort` admitidos por GET /api/media (orden global antes de paginar). */
@@ -211,6 +220,38 @@ export interface IntegrationPickerTokenDto {
   appId?: string;
 }
 
+/** POST /api/media/{mediaId}/edit-image — recorte normalizado sobre imagen orientada (EXIF). */
+export interface MediaEditImageCropDto {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface MediaEditImageOutputDto {
+  width: number;
+  height: number;
+  format: 'webp' | 'jpeg' | 'jpg';
+  quality: number;
+}
+
+export interface MediaEditImageTransformDto {
+  rotateDeg: 0 | 90 | 180 | 270;
+  flipHorizontal: boolean;
+  flipVertical: boolean;
+}
+
+export interface MediaEditImageRequestDto {
+  mode: 'save_as_copy';
+  preset: string;
+  outputName?: string;
+  output: MediaEditImageOutputDto;
+  crop: MediaEditImageCropDto;
+  transform?: MediaEditImageTransformDto;
+  folderId?: number | null;
+  tags?: string[];
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -295,10 +336,27 @@ export class ComposerMediaService {
     );
   }
 
-  getMedia(id: number): Observable<ApiResponse<MediaLibraryItemDto>> {
-    return this.http.get<ApiResponse<MediaLibraryItemDto>>(`${this.base}/${id}`).pipe(
+  getMedia(id: number): Observable<ApiResponse<MediaDetailDto>> {
+    return this.http.get<ApiResponse<MediaDetailDto>>(`${this.base}/${id}`).pipe(
       catchError((err) => throwError(() => err))
     );
+  }
+
+  editImage(
+    mediaId: number,
+    body: MediaEditImageRequestDto,
+    options?: { idempotencyKey?: string }
+  ): Observable<ApiResponse<MediaDetailDto>> {
+    let headers = new HttpHeaders();
+    const key = options?.idempotencyKey?.trim();
+    if (key) {
+      headers = headers.set('Idempotency-Key', key);
+    }
+    return this.http
+      .post<ApiResponse<MediaDetailDto>>(`${this.base}/${mediaId}/edit-image`, body, {
+        headers
+      })
+      .pipe(catchError((err) => throwError(() => err)));
   }
 
   previewUrl(body: MediaPreviewUrlRequest): Observable<ApiResponse<MediaPreviewUrlResponseBody>> {

@@ -617,22 +617,281 @@
     </article>
   </section>
 
-  <section class="detail-backdrop" *ngIf="showDetail" (click)="closeDetail()">
-    <article class="detail" (click)="$event.stopPropagation()">
-      <header>
-        <h3>Detalle del activo</h3>
-        <button type="button" class="btn" (click)="closeDetail()">Cerrar</button>
+  <section
+    class="detail-backdrop"
+    *ngIf="showDetail"
+    (click)="closeDetail()"
+    role="presentation">
+    <article
+      class="detail media-detail"
+      (click)="$event.stopPropagation()"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="media-detail-title">
+      <header class="media-detail-head">
+        <div class="media-detail-head-text">
+          <p class="media-detail-eyebrow">Biblioteca</p>
+          <h3 id="media-detail-title" class="media-detail-title">
+            {{ detailLoading ? 'Cargando…' : (detailAsset?.name || 'Detalle del activo') }}
+          </h3>
+        </div>
+        <button type="button" class="media-detail-close" (click)="closeDetail()" aria-label="Cerrar detalle">×</button>
       </header>
-      <p *ngIf="detailLoading">Cargando detalle…</p>
-      <div *ngIf="!detailLoading && detailAsset">
-        <p><strong>ID:</strong> {{ detailAsset.mediaId }}</p>
-        <p><strong>Nombre:</strong> {{ detailAsset.name }}</p>
-        <p><strong>Tipo:</strong> {{ detailAsset.mimeType }}</p>
-        <p><strong>Fuente:</strong> {{ detailAsset.source || 'n/d' }}</p>
-        <p><strong>Estado:</strong> {{ detailAsset.status || 'active' }}</p>
-        <p><strong>Creado:</strong> {{ detailAsset.createdAt || 'n/d' }}</p>
-        <p><strong>Último uso:</strong> {{ detailAsset.lastUsedAt || 'n/d' }}</p>
+
+      <div class="media-detail-loading" *ngIf="detailLoading" aria-busy="true">
+        <div class="media-detail-skeleton media-detail-skeleton-preview"></div>
+        <div class="media-detail-skeleton-rows">
+          <div class="media-detail-skeleton media-detail-skeleton-line"></div>
+          <div class="media-detail-skeleton media-detail-skeleton-line short"></div>
+          <div class="media-detail-skeleton media-detail-skeleton-line"></div>
+        </div>
       </div>
+
+      <div class="media-detail-body" *ngIf="!detailLoading && detailAsset">
+        <div class="media-detail-preview-col">
+          <div class="media-detail-preview-frame">
+            <ng-container *ngIf="isImage(detailAsset)">
+              <img
+                *ngIf="detailPreviewImageUrl(detailAsset)"
+                [src]="detailPreviewImageUrl(detailAsset)"
+                [alt]="detailAsset.name"
+                class="media-detail-preview-media" />
+              <div *ngIf="!detailPreviewImageUrl(detailAsset)" class="media-detail-preview-empty">
+                <span class="media-detail-doc-badge">{{ assetBadgeLabel(detailAsset) }}</span>
+                <p>Sin vista previa para este tipo de archivo.</p>
+              </div>
+            </ng-container>
+            <ng-container *ngIf="isVideo(detailAsset)">
+              <video
+                *ngIf="detailPreviewVideoUrl(detailAsset)"
+                [src]="detailPreviewVideoUrl(detailAsset)"
+                controls
+                playsinline
+                class="media-detail-preview-media media-detail-preview-video"></video>
+              <div *ngIf="!detailPreviewVideoUrl(detailAsset)" class="media-detail-preview-empty">
+                <span class="media-detail-doc-badge">Video</span>
+                <p>No hay URL de reproducción disponible.</p>
+              </div>
+            </ng-container>
+            <ng-container *ngIf="!isImage(detailAsset) && !isVideo(detailAsset)">
+              <div class="media-detail-preview-empty">
+                <span class="media-detail-doc-badge">{{ assetBadgeLabel(detailAsset) }}</span>
+                <p>Vista previa no disponible para este tipo de archivo.</p>
+                <a
+                  *ngIf="detailAsset.publicUrl"
+                  class="media-detail-external-link"
+                  [href]="detailAsset.publicUrl"
+                  target="_blank"
+                  rel="noopener noreferrer">
+                  Abrir recurso en nueva pestaña
+                </a>
+              </div>
+            </ng-container>
+          </div>
+          <div class="media-detail-badges-row">
+            <span
+              class="media-detail-pill"
+              [class.media-detail-pill--pending]="detailAsset.processingStatus === 'pending'"
+              [class.media-detail-pill--ok]="detailAsset.processingStatus === 'completed'"
+              [class.media-detail-pill--err]="detailAsset.processingStatus === 'failed'">
+              {{ processingStatusLabel(detailAsset.processingStatus) }}
+            </span>
+            <span class="media-detail-pill media-detail-pill--neutral" *ngIf="detailAsset.status === 'archived'">
+              Archivado
+            </span>
+            <span class="media-detail-pill media-detail-pill--warn" *ngIf="detailAsset.isInUse">En uso en planes</span>
+          </div>
+        </div>
+
+        <div class="media-detail-meta-col">
+          <!-- 1. Información -->
+          <section class="media-detail-section-card" aria-labelledby="media-detail-info-heading">
+            <div class="media-detail-section-head">
+              <span class="media-detail-info-icon" aria-hidden="true">
+                <img
+                  src="assets/Icons/icon-icons.svg"
+                  alt=""
+                  class="media-detail-info-icon-img"
+                  width="24"
+                  height="24"
+                  decoding="async" />
+              </span>
+              <h4 id="media-detail-info-heading" class="media-detail-section-title">Información</h4>
+            </div>
+            <div class="media-detail-info-grid">
+              <div class="media-detail-info-item">
+                <span class="media-detail-info-label">Tipo</span>
+                <span class="media-detail-info-value">{{ detailTypeDisplayLabel(detailAsset) }}</span>
+              </div>
+              <div class="media-detail-info-item">
+                <span class="media-detail-info-label">Dimensiones</span>
+                <span class="media-detail-info-value">{{ detailDimensionsLabel(detailAsset) }}</span>
+              </div>
+              <div class="media-detail-info-item">
+                <span class="media-detail-info-label">Tamaño</span>
+                <span class="media-detail-info-value">{{
+                  detailAsset.sizeBytes != null ? formatBytes(detailAsset.sizeBytes) : '—'
+                }}</span>
+              </div>
+              <div class="media-detail-info-item">
+                <span class="media-detail-info-label">Fuente</span>
+                <span class="media-detail-info-value">{{ detailSourceLabel(detailAsset.source) }}</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 2. Organización -->
+          <section class="media-detail-section-card" aria-labelledby="media-detail-org-heading">
+            <div class="media-detail-section-head">
+              <span class="media-detail-section-icon-wrap" aria-hidden="true">
+                <img
+                  src="assets/Icons/folder-1%20(2).svg"
+                  alt=""
+                  class="media-detail-section-svg-img"
+                  width="24"
+                  height="24"
+                  decoding="async" />
+              </span>
+              <h4 id="media-detail-org-heading" class="media-detail-section-title">Organización</h4>
+            </div>
+            <div class="media-detail-info-grid">
+              <div class="media-detail-info-item">
+                <span class="media-detail-info-label">Ubicación</span>
+                <span class="media-detail-info-value">{{ detailLocationPathLabel() }}</span>
+              </div>
+              <div class="media-detail-info-item">
+                <span class="media-detail-info-label">Etiquetas</span>
+                <div class="media-detail-tags-inline">
+                  <span class="media-detail-chip media-detail-chip--muted" *ngFor="let tag of detailAsset.tags ?? []">{{
+                    tag
+                  }}</span>
+                  <span class="media-detail-chip-empty" *ngIf="!(detailAsset.tags?.length)">Sin etiquetas</span>
+                  <button
+                    type="button"
+                    class="media-detail-tag-add"
+                    (click)="openDetailEdit()"
+                    aria-label="Añadir o editar etiquetas">
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 3. Uso -->
+          <section class="media-detail-section-card" aria-labelledby="media-detail-usage-heading">
+            <div class="media-detail-section-head">
+              <span class="media-detail-section-icon-wrap" aria-hidden="true">
+                <img
+                  src="assets/Icons/pie-chart-2%20(2).svg"
+                  alt=""
+                  class="media-detail-section-svg-img"
+                  width="24"
+                  height="24"
+                  decoding="async" />
+              </span>
+              <h4 id="media-detail-usage-heading" class="media-detail-section-title">Uso</h4>
+            </div>
+            <p class="media-detail-usage-line">{{ detailUsageSummaryLine() }}</p>
+          </section>
+
+          <!-- 4. Actividad -->
+          <section class="media-detail-section-card" aria-labelledby="media-detail-activity-heading">
+            <div class="media-detail-section-head">
+              <span class="media-detail-section-icon-wrap" aria-hidden="true">
+                <img
+                  src="assets/Icons/TIME.svg"
+                  alt=""
+                  class="media-detail-section-svg-img"
+                  width="24"
+                  height="24"
+                  decoding="async" />
+              </span>
+              <h4 id="media-detail-activity-heading" class="media-detail-section-title">Actividad</h4>
+            </div>
+            <div class="media-detail-info-grid media-detail-activity-grid">
+              <div class="media-detail-info-item">
+                <span class="media-detail-info-label">Creado</span>
+                <span class="media-detail-info-value">{{ formatDetailActivityDate(detailAsset.createdAt) }}</span>
+              </div>
+              <div class="media-detail-info-item">
+                <span class="media-detail-info-label">Actualizado</span>
+                <span class="media-detail-info-value">{{ formatDetailActivityDate(detailAsset.updatedAt) }}</span>
+              </div>
+              <div class="media-detail-info-item media-detail-info-item--full">
+                <span class="media-detail-info-label">Último uso</span>
+                <span class="media-detail-info-value">{{ formatDetailActivityDate(detailAsset.lastUsedAt) }}</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 5. Detalles técnicos (sin ID; 3 columnas) -->
+          <section class="media-detail-section-card media-detail-section-card--accordion" aria-labelledby="media-detail-tech-heading">
+            <button
+              type="button"
+              class="media-detail-tech-toggle"
+              (click)="toggleDetailTechSection()"
+              [attr.aria-expanded]="detailTechExpanded">
+              <span class="media-detail-tech-toggle-left">
+                <span class="media-detail-section-icon-wrap" aria-hidden="true">
+                  <img
+                    src="assets/Icons/gear-1.svg"
+                    alt=""
+                    class="media-detail-section-svg-img"
+                    width="24"
+                    height="24"
+                    decoding="async" />
+                </span>
+                <span id="media-detail-tech-heading" class="media-detail-section-title">Detalles técnicos</span>
+              </span>
+              <span
+                class="media-detail-tech-chevron"
+                [class.media-detail-tech-chevron--open]="detailTechExpanded"
+                aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="24" height="24" focusable="false">
+                  <path fill="currentColor" d="M7 10l5 5 5-5z" />
+                </svg>
+              </span>
+            </button>
+            <div class="media-detail-tech-body" *ngIf="detailTechExpanded">
+              <div class="media-detail-tech-grid">
+                <div class="media-detail-info-item">
+                  <span class="media-detail-info-label">Procesamiento</span>
+                  <span class="media-detail-info-value">{{ processingStatusLabel(detailAsset.processingStatus) }}</span>
+                </div>
+                <div class="media-detail-info-item">
+                  <span class="media-detail-info-label">Miniatura</span>
+                  <span class="media-detail-info-value">{{ detailAvailabilityWord(detailAsset.hasThumbnail) }}</span>
+                </div>
+                <div class="media-detail-info-item">
+                  <span class="media-detail-info-label">Vista previa</span>
+                  <span class="media-detail-info-value">{{ detailAvailabilityWord(detailAsset.hasPreview) }}</span>
+                </div>
+              </div>
+              <p class="media-detail-tech-footnote" *ngIf="detailAsset.tenantId != null || detailAsset.createdByUserId != null">
+                <span *ngIf="detailAsset.tenantId != null">Tenant {{ detailAsset.tenantId }}</span>
+                <span *ngIf="detailAsset.tenantId != null && detailAsset.createdByUserId != null"> · </span>
+                <span *ngIf="detailAsset.createdByUserId != null">Usuario {{ detailAsset.createdByUserId }}</span>
+              </p>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <footer class="media-detail-footer" *ngIf="!detailLoading && detailAsset">
+        <div class="media-detail-footer-actions">
+          <button type="button" class="btn secondary" (click)="copyDetailPublicUrl()">Copiar URL</button>
+          <button type="button" class="btn secondary" (click)="openDetailEdit()">Editar</button>
+          <button
+            type="button"
+            class="btn secondary"
+            *ngIf="isImage(detailAsset) && detailAsset.processingStatus === 'completed'"
+            (click)="openDetailImageEditor()">
+            Editar imagen
+          </button>
+          <button type="button" class="btn primary" (click)="openDetailUseInComposer()">Usar en publicación</button>
+        </div>
+      </footer>
     </article>
   </section>
 
@@ -829,4 +1088,17 @@
       </ul>
     </li>
   </ng-template>
+
+  <app-media-image-editor-modal
+    *ngIf="showImageEditor"
+    [open]="showImageEditor"
+    [mediaId]="imageEditorMediaId"
+    [imageUrl]="imageEditorImageUrl"
+    [naturalWidth]="imageEditorNaturalW"
+    [naturalHeight]="imageEditorNaturalH"
+    [folderId]="imageEditorFolderId"
+    [assetBaseName]="imageEditorBaseName"
+    [defaultTags]="imageEditorTags"
+    (closed)="closeImageEditor()"
+    (saved)="onImageEditorSaved($event)" />
 </div>

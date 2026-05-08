@@ -1,0 +1,99 @@
+<section
+  class="img-editor-backdrop"
+  *ngIf="open"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="img-editor-title"
+  (click)="close()">
+  <article class="img-editor-modal" (click)="$event.stopPropagation()">
+    <header class="img-editor-head">
+      <div class="img-editor-head-text">
+        <h2 id="img-editor-title" class="img-editor-title">Edita tu imagen</h2>
+        <p class="img-editor-sub">
+          Corta, modifica las dimensiones o selecciona un ratio predefinido para tu imagen.
+        </p>
+      </div>
+      <button type="button" class="img-editor-close" (click)="close()" aria-label="Cerrar">×</button>
+    </header>
+
+    <div class="img-editor-body">
+      <aside class="img-editor-presets" aria-label="Presets por red social">
+        <div class="img-editor-preset-group" *ngFor="let g of presetGroups">
+          <p class="img-editor-platform">{{ g.platform }}</p>
+          <div class="img-editor-preset-cards">
+            <button
+              type="button"
+              class="img-editor-preset-card"
+              *ngFor="let item of g.items; trackBy: trackPresetId"
+              [class.img-editor-preset-card--active]="isPresetActive(item)"
+              (click)="selectPreset(item)">
+              <span class="img-editor-preset-ratio">{{ item.ratioLabel }}</span>
+              <span class="img-editor-preset-label">{{ item.label }}</span>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <div class="img-editor-main">
+        <div class="img-editor-canvas-host">
+          <div class="img-editor-loading" *ngIf="loading">Cargando editor…</div>
+          <div class="img-editor-canvas-wrap" #canvasWrap>
+            <canvas #fabricCanvas class="img-editor-fabric-canvas"></canvas>
+          </div>
+        </div>
+
+        <div class="img-editor-toolbar">
+          <span class="img-editor-dim">{{ cropDimensionsLabel }}</span>
+          <div class="img-editor-transform">
+            <button type="button" class="img-editor-tool-btn" (click)="rotateRight()" aria-label="Rotar 90 grados">
+              Rotar 90°
+            </button>
+            <button
+              type="button"
+              class="img-editor-tool-btn"
+              [class.active]="flipHorizontal"
+              (click)="toggleFlipHorizontal()"
+              aria-label="Voltear horizontal">
+              Voltear H
+            </button>
+            <button
+              type="button"
+              class="img-editor-tool-btn"
+              [class.active]="flipVertical"
+              (click)="toggleFlipVertical()"
+              aria-label="Voltear vertical">
+              Voltear V
+            </button>
+            <button type="button" class="img-editor-tool-btn ghost" (click)="resetTransform()" aria-label="Reiniciar transformación">
+              Reset
+            </button>
+          </div>
+          <span class="img-editor-transform-summary">{{ transformSummaryLabel }}</span>
+          <div class="img-editor-zoom">
+            <span class="img-editor-zoom-ico" aria-hidden="true">−</span>
+            <input
+              type="range"
+              min="35"
+              max="300"
+              step="5"
+              [(ngModel)]="zoomPercent"
+              (ngModelChange)="onZoomChange()"
+              aria-label="Zoom del lienzo" />
+            <span class="img-editor-zoom-ico" aria-hidden="true">+</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="img-editor-error" *ngIf="errorMessage">{{ errorMessage }}</p>
+
+    <footer class="img-editor-footer">
+      <button type="button" class="btn-img-editor secondary" (click)="close()" [disabled]="saving">
+        Cancelar
+      </button>
+      <button type="button" class="btn-img-editor primary" (click)="save()" [disabled]="loading || saving || !canSave || !!errorMessage">
+        {{ saving ? 'Guardando…' : 'Guardar' }}
+      </button>
+    </footer>
+  </article>
+</section>

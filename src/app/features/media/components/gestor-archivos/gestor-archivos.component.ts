@@ -11,11 +11,13 @@ import {
   MediaListSortParam,
   IntegrationFileItemDto,
   IntegrationPickerTokenDto,
-  MediaFolderDto
+  MediaFolderDto,
+  MediaDetailDto
 } from '../../../scheduler/services/composer-media.service';
 import { extractErrorMessage } from '../../../../shared/utils/error.utils';
 import { MediaSelectionService } from '../../services/media-selection.service';
 import { GooglePickerService, PickedGoogleFile } from '../../services/google-picker.service';
+import { MediaImageEditorModalComponent } from '../media-image-editor-modal/media-image-editor-modal.component';
 
 /** Modo UI; `smart` se envía al API como orden servidor (`recently_used`). */
 type SortMode = 'smart' | MediaListSortParam;
@@ -37,8 +39,19 @@ interface MediaAsset {
   name: string;
   mimeType: string;
   thumbnailUrl?: string;
+  previewUrl?: string | null;
   publicUrl?: string;
+  folderId?: number | null;
+  folderName?: string | null;
+  hasThumbnail?: boolean;
+  hasPreview?: boolean;
+  processingStatus?: 'pending' | 'completed' | 'failed';
+  width?: number | null;
+  height?: number | null;
+  tenantId?: number;
+  createdByUserId?: number;
   createdAt?: string;
+  updatedAt?: string | null;
   lastUsedAt?: string;
   usageCount?: number;
   source?: string;
@@ -65,7 +78,7 @@ type ToastTone = 'success' | 'error' | 'warn' | 'info';
 @Component({
   selector: 'app-gestor-archivos',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, MediaImageEditorModalComponent],
   templateUrl: './gestor-archivos.component.html',
   styleUrl: './gestor-archivos.component.scss'
 })
@@ -146,6 +159,10 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
   detailLoading = false;
   detailAsset: MediaAsset | null = null;
   showDetail = false;
+  /** Ancestros de carpeta para la ruta en «Organización» (GET folders/{id}/ancestors). */
+  detailFolderAncestors: MediaFolderDto[] = [];
+  /** Panel «Detalles técnicos» expandible. */
+  detailTechExpanded = true;
 
   // Batch UI
   selectedIds = new Set<number>();
@@ -192,6 +209,15 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
   editNameDraft = '';
   editTagsDraft = '';
   editSaving = false;
+
+  showImageEditor = false;
+  imageEditorMediaId = 0;
+  imageEditorImageUrl = '';
+  imageEditorNaturalW = 0;
+  imageEditorNaturalH = 0;
+  imageEditorFolderId: number | null = null;
+  imageEditorBaseName = '';
+  imageEditorTags: string[] = [];
 
   showBatchTagModal = false;
   batchTagsDraft = '';
@@ -586,18 +612,38 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
     this.infiniteScrollObserver = null;
   }
 
-  private normalizeAsset(it: MediaLibraryItemDto): MediaAsset {
+  private normalizeAsset(it: MediaLibraryItemDto | MediaDetailDto): MediaAsset {
     const anyIt = it as unknown as Record<string, unknown>;
     const mediaId =
       (typeof anyIt['mediaId'] === 'number' ? anyIt['mediaId'] : undefined) ??
       (typeof anyIt['id'] === 'number' ? anyIt['id'] : 0);
+    const previewUrlRaw = anyIt['previewUrl'];
+    const folderIdRaw = anyIt['folderId'];
+    const widthRaw = anyIt['width'];
+    const heightRaw = anyIt['height'];
     return {
       mediaId,
       name: String(anyIt['name'] ?? `Media #${mediaId}`),
       mimeType: String(anyIt['mimeType'] ?? 'application/octet-stream'),
       thumbnailUrl: typeof anyIt['thumbnailUrl'] === 'string' ? anyIt['thumbnailUrl'] : undefined,
+      previewUrl: typeof previewUrlRaw === 'string' ? previewUrlRaw : null,
       publicUrl: typeof anyIt['publicUrl'] === 'string' ? anyIt['publicUrl'] : undefined,
+      folderId: typeof folderIdRaw === 'number' ? folderIdRaw : folderIdRaw === null ? null : undefined,
+      folderName:
+        typeof anyIt['folderName'] === 'string'
+          ? anyIt['folderName']
+          : anyIt['folderName'] === null
+            ? null
+            : undefined,
+      hasThumbnail: typeof anyIt['hasThumbnail'] === 'boolean' ? anyIt['hasThumbnail'] : undefined,
+      hasPreview: typeof anyIt['hasPreview'] === 'boolean' ? anyIt['hasPreview'] : undefined,
+      processingStatus: anyIt['processingStatus'] as MediaAsset['processingStatus'] | undefined,
+      width: typeof widthRaw === 'number' ? widthRaw : widthRaw === null ? null : undefined,
+      height: typeof heightRaw === 'number' ? heightRaw : heightRaw === null ? null : undefined,
+      tenantId: typeof anyIt['tenantId'] === 'number' ? anyIt['tenantId'] : undefined,
+      createdByUserId: typeof anyIt['createdByUserId'] === 'number' ? anyIt['createdByUserId'] : undefined,
       createdAt: typeof anyIt['createdAt'] === 'string' ? anyIt['createdAt'] : undefined,
+      updatedAt: typeof anyIt['updatedAt'] === 'string' ? anyIt['updatedAt'] : null,
       lastUsedAt: typeof anyIt['lastUsedAt'] === 'string' ? anyIt['lastUsedAt'] : undefined,
       usageCount: typeof anyIt['usageCount'] === 'number' ? anyIt['usageCount'] : undefined,
       source: typeof anyIt['source'] === 'string' ? anyIt['source'] : undefined,
@@ -1223,6 +1269,7 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
       next: (res) => {
         this.detailLoading = false;
         this.detailAsset = this.normalizeAsset(res.data);
+        this.loadDetailFolderAncestors(res.data.folderId);
       },
       error: (err) => {
         this.detailLoading = false;
@@ -1236,6 +1283,247 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
   closeDetail(): void {
     this.showDetail = false;
     this.detailAsset = null;
+    this.detailFolderAncestors = [];
+    this.detailTechExpanded = true;
+  }
+
+  private loadDetailFolderAncestors(folderId: number | null | undefined): void {
+    this.detailFolderAncestors = [];
+    if (folderId == null || typeof folderId !== 'number') {
+      return;
+    }
+    const sub = this.mediaApi.getFolderAncestors(folderId).subscribe({
+      next: (res) => {
+        this.detailFolderAncestors = Array.isArray(res.data) ? res.data : [];
+      },
+      error: () => {
+        this.detailFolderAncestors = [];
+      }
+    });
+    this.subscriptions.add(sub);
+  }
+
+  toggleDetailTechSection(): void {
+    this.detailTechExpanded = !this.detailTechExpanded;
+  }
+
+  /** Ruta legible tipo «Biblioteca / … / carpeta» para el bloque Organización. */
+  detailLocationPathLabel(): string {
+    const asset = this.detailAsset;
+    if (!asset) {
+      return '—';
+    }
+    if (asset.folderId === null) {
+      return 'Biblioteca';
+    }
+    const parts: string[] = ['Biblioteca'];
+    const byDepth = [...this.detailFolderAncestors].sort((a, b) => a.depth - b.depth);
+    const seen = new Set<number>();
+    for (const f of byDepth) {
+      if (seen.has(f.folderId)) {
+        continue;
+      }
+      seen.add(f.folderId);
+      if (f.folderId === asset.folderId) {
+        continue;
+      }
+      const n = f.name?.trim();
+      if (n) {
+        parts.push(n);
+      }
+    }
+    const leaf = asset.folderName?.trim();
+    if (leaf) {
+      if (parts[parts.length - 1] !== leaf) {
+        parts.push(leaf);
+      }
+    } else {
+      parts.push('Carpeta no disponible');
+    }
+    return parts.join(' / ');
+  }
+
+  /** Texto principal del bloque «Uso». */
+  detailUsageSummaryLine(): string {
+    const asset = this.detailAsset;
+    if (!asset) {
+      return '';
+    }
+    const count = asset.usageCount ?? 0;
+    if (count === 0 && !asset.isInUse && !asset.lastUsedAt?.trim()) {
+      return 'No se ha usado en publicaciones todavía.';
+    }
+    const chunks: string[] = [];
+    if (count > 0) {
+      chunks.push(
+        `${count} ${count === 1 ? 'referencia en planes de publicación' : 'referencias en planes de publicación'}`
+      );
+    }
+    if (asset.isInUse) {
+      chunks.push('Aparece en planes pendientes');
+    }
+    if (asset.lastUsedAt?.trim()) {
+      chunks.push(`Último uso: ${this.formatDetailActivityDate(asset.lastUsedAt)}`);
+    }
+    return chunks.join(' · ') || 'Sin datos de uso.';
+  }
+
+  /** Fechas estilo «23 abr 2026, 18:27» para Actividad. */
+  formatDetailActivityDate(iso?: string | null): string {
+    if (!iso?.trim()) {
+      return '—';
+    }
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) {
+      return String(iso);
+    }
+    return d.toLocaleString('es-ES', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
+
+  detailAvailabilityWord(v: boolean | undefined): string {
+    return v ? 'disponible' : 'no disponible';
+  }
+
+  @HostListener('document:keydown', ['$event'])
+  onDocumentKeydownForDetail(ev: KeyboardEvent): void {
+    if (ev.key !== 'Escape' || !this.showDetail) {
+      return;
+    }
+    ev.preventDefault();
+    this.closeDetail();
+  }
+
+  /** Orden: vista previa intermedia → principal → miniatura (alineado al contrato de detalle). */
+  detailPreviewImageUrl(asset: MediaAsset): string {
+    const p = asset.previewUrl?.trim();
+    const u = asset.publicUrl?.trim();
+    const t = asset.thumbnailUrl?.trim();
+    return p || u || t || '';
+  }
+
+  detailPreviewVideoUrl(asset: MediaAsset): string {
+    const p = asset.previewUrl?.trim();
+    const u = asset.publicUrl?.trim();
+    return p || u || '';
+  }
+
+  processingStatusLabel(status?: MediaAsset['processingStatus']): string {
+    switch (status) {
+      case 'completed':
+        return 'Procesado';
+      case 'failed':
+        return 'Error al procesar';
+      case 'pending':
+      default:
+        return 'Pendiente';
+    }
+  }
+
+  detailDimensionsLabel(asset: MediaAsset): string {
+    const w = asset.width;
+    const h = asset.height;
+    if (typeof w === 'number' && typeof h === 'number' && w > 0 && h > 0) {
+      return `${w} × ${h} px`;
+    }
+    return '—';
+  }
+
+  /** Texto amigable para la rejilla «Información» (p. ej. Imagen JPEG). */
+  detailTypeDisplayLabel(asset: MediaAsset): string {
+    const kind = this.assetBadgeLabel(asset);
+    const short = this.formatMimeShort(asset.mimeType);
+    if (!short || short === 'Archivo') {
+      return kind;
+    }
+    return `${kind} ${short}`;
+  }
+
+  /** Etiqueta de fuente alineada al contrato (`upload`, importaciones, etc.). */
+  detailSourceLabel(source?: string): string {
+    const raw = (source ?? '').trim();
+    if (!raw) {
+      return '—';
+    }
+    const s = raw.toLowerCase();
+    if (s === 'upload') {
+      return 'Subida local';
+    }
+    if (s === 'import-url' || s === 'import_url' || s === 'import') {
+      return 'Importación por URL';
+    }
+    return raw;
+  }
+
+  async copyDetailPublicUrl(): Promise<void> {
+    const url = this.detailAsset?.publicUrl?.trim();
+    if (!url) {
+      this.showToast('No hay URL pública disponible.', 'warn');
+      return;
+    }
+    await this.copyToClipboard(url, 'URL copiada al portapapeles.');
+  }
+
+  private async copyToClipboard(text: string, successMessage: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text);
+      this.showToast(successMessage, 'success');
+    } catch {
+      this.showToast('No se pudo copiar al portapapeles.', 'error');
+    }
+  }
+
+  openDetailEdit(): void {
+    if (!this.detailAsset) {
+      return;
+    }
+    const asset = this.detailAsset;
+    this.closeDetail();
+    this.editAsset(asset);
+  }
+
+  openDetailImageEditor(): void {
+    const a = this.detailAsset;
+    if (!a || !this.isImage(a) || a.processingStatus !== 'completed') {
+      return;
+    }
+    const url = this.detailPreviewImageUrl(a).trim();
+    if (!url) {
+      this.showToast('No hay vista previa disponible para editar.', 'warn');
+      return;
+    }
+    this.imageEditorMediaId = a.mediaId;
+    this.imageEditorImageUrl = url;
+    this.imageEditorNaturalW = typeof a.width === 'number' && a.width > 0 ? a.width : 0;
+    this.imageEditorNaturalH = typeof a.height === 'number' && a.height > 0 ? a.height : 0;
+    this.imageEditorFolderId = a.folderId ?? null;
+    this.imageEditorBaseName = (a.name ?? '').trim();
+    this.imageEditorTags = a.tags?.length ? [...a.tags] : [];
+    this.showImageEditor = true;
+  }
+
+  closeImageEditor(): void {
+    this.showImageEditor = false;
+  }
+
+  onImageEditorSaved(_detail: MediaDetailDto): void {
+    this.showImageEditor = false;
+    this.showToast('Nueva copia guardada en la biblioteca.', 'success');
+    this.loadAssets();
+  }
+
+  openDetailUseInComposer(): void {
+    if (!this.detailAsset) {
+      return;
+    }
+    const asset = this.detailAsset;
+    this.closeDetail();
+    this.useInComposer(asset);
   }
 
   useInComposer(asset: MediaAsset): void {
