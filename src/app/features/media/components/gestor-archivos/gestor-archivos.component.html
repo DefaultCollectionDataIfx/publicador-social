@@ -13,6 +13,58 @@
     <button type="button" class="floating-toast-close" (click)="clearToast()" aria-label="Cerrar mensaje">×</button>
   </div>
 
+  <aside
+    class="upload-progress-panel"
+    *ngIf="showUploadProgress"
+    role="region"
+    aria-live="polite"
+    [attr.aria-busy]="uploadPhase === 'uploading' || uploadPhase === 'processing'"
+    aria-label="Progreso de subida de archivos">
+    <header class="upload-progress-head">
+      <div class="upload-progress-head-text">
+        <strong class="upload-progress-title">{{ uploadProgressTitle() }}</strong>
+        <span class="upload-progress-subtitle">{{ uploadProgressSubtitle() }}</span>
+      </div>
+      <button
+        type="button"
+        class="upload-progress-close"
+        *ngIf="uploadPhase === 'done' || uploadPhase === 'error'"
+        (click)="dismissUploadProgress()"
+        aria-label="Cerrar panel de subida">
+        ×
+      </button>
+    </header>
+
+    <div
+      class="upload-progress-bar-wrap"
+      *ngIf="uploadPhase === 'uploading' || uploadPhase === 'processing'"
+      role="progressbar"
+      [attr.aria-valuenow]="uploadPhase === 'uploading' ? uploadBytesPercent : null"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      [attr.aria-label]="uploadPhase === 'uploading' ? 'Progreso de envío' : 'Procesando archivos'">
+      <div
+        class="upload-progress-bar"
+        [class.indeterminate]="uploadPhase === 'processing'"
+        [style.width.%]="uploadPhase === 'uploading' ? uploadBytesPercent : null"></div>
+    </div>
+
+    <ul class="upload-progress-list">
+      <li
+        *ngFor="let item of uploadProgressItems"
+        class="upload-progress-item"
+        [attr.data-status]="item.status">
+        <span class="upload-progress-item-icon" aria-hidden="true"></span>
+        <div class="upload-progress-item-body">
+          <span class="upload-progress-item-name" [title]="item.fileName">{{ item.fileName }}</span>
+          <span class="upload-progress-item-meta">
+            {{ formatBytes(item.sizeBytes) }} · {{ uploadItemStatusLabel(item) }}
+          </span>
+        </div>
+      </li>
+    </ul>
+  </aside>
+
   <!-- Zona 2: layout con carpetas -->
   <section class="media-layout">
     <div class="sidebar-column">
@@ -114,6 +166,7 @@
             {{ uploading ? 'Subiendo…' : 'Subir' }}
             <input
               type="file"
+              multiple
               (change)="onUploadInput($event)"
               accept="image/*,video/*,application/pdf,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt"
               [disabled]="uploading" />
@@ -300,11 +353,13 @@
         <p class="empty-desc">Sube algo o impórtalo por URL para empezar tu biblioteca.</p>
         <div class="empty-cta">
           <label class="btn primary upload-btn">
-            Subir archivo
+            {{ uploading ? 'Subiendo…' : 'Subir archivo' }}
             <input
               type="file"
+              multiple
               (change)="onUploadInput($event)"
-              accept="image/*,video/*,application/pdf,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt" />
+              accept="image/*,video/*,application/pdf,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt"
+              [disabled]="uploading" />
           </label>
           <button type="button" class="btn secondary" (click)="openImportFromUrl()">Importar desde URL</button>
         </div>
@@ -518,9 +573,9 @@
     <article class="detail modal-import modal-import--wide" (click)="$event.stopPropagation()">
       <header class="modal-head">
         <div>
-          <h3>Importar desde Google Drive</h3>
+          <h3>Importar desde {{ integrationProviderLabel() }}</h3>
           <p class="modal-help integration-lead">
-            Selecciona un archivo desde tu cuenta de Google e impórtalo a tu biblioteca.
+            {{ integrationModalHelp() }}
           </p>
         </div>
         <button type="button" class="btn ghost modal-close" (click)="closeImportModal()" aria-label="Cerrar">✕</button>
@@ -528,7 +583,7 @@
 
       <div class="oauth-state compact" [class.connected]="oauthUiState === 'connected'" [class.error]="oauthUiState === 'error'">
         <div class="oauth-main">
-          <strong>{{ oauthUiState === 'connected' ? 'Google Drive conectado' : oauthStateLabel() }}</strong>
+          <strong>{{ oauthUiState === 'connected' ? integrationConnectedTitle() : oauthStateLabel() }}</strong>
           <p *ngIf="oauthUiState === 'connected' && integrationAccountEmail">
             {{ integrationAccountEmail }} · conectado hace un momento
           </p>
@@ -549,39 +604,224 @@
         </button>
       </div>
 
-      <section class="picker-cta-card" *ngIf="oauthUiState === 'connected'">
-        <button type="button" class="btn primary integration-pick-primary" (click)="openGooglePicker()" [disabled]="pickerLoading">
-          {{ pickerLoading ? 'Abriendo selector…' : 'Seleccionar archivo en Google Drive' }}
+      <section class="picker-cta-card" *ngIf="oauthUiState === 'connected' && integrationProvider !== 'canva'">
+        <button type="button" class="btn primary integration-pick-primary" (click)="openIntegrationPicker()" [disabled]="pickerLoading">
+          {{ integrationPickerButtonLabel() }}
         </button>
-        <p class="integration-picker-note">Se abrirá el selector oficial de Google.</p>
+        <p class="integration-picker-note">{{ integrationPickerNote() }}</p>
       </section>
 
-      <section class="selected-file-card" *ngIf="integrationFileId.trim()">
-        <p class="selected-file-title">Archivo seleccionado</p>
-        <div class="selected-file-row">
-          <div class="selected-file-thumb">GD</div>
-          <div class="selected-file-text">
-            <strong>{{ selectedPickerFileName || integrationImportName || 'Archivo seleccionado' }}</strong>
-            <small>{{ selectedPickerMimeType || 'Archivo de Google Drive' }}</small>
+      <!-- Canva: grilla propia de diseños -->
+      <section class="canva-import-panel" *ngIf="integrationProvider === 'canva' && oauthUiState === 'connected'">
+        <div class="canva-designs-toolbar">
+          <input
+            type="search"
+            class="field-input canva-search-input"
+            [(ngModel)]="canvaDesignQuery"
+            (input)="onCanvaSearchInput()"
+            placeholder="Buscar diseños…"
+            [disabled]="canvaImportBusy()" />
+          <select
+            class="field-input canva-filter-select"
+            [(ngModel)]="canvaSortBy"
+            (ngModelChange)="onCanvaFiltersChange()"
+            [disabled]="canvaImportBusy()">
+            <option value="modified_desc">Modificados recientemente</option>
+            <option value="modified_asc">Modificados antiguos</option>
+            <option value="created_desc">Creados recientemente</option>
+            <option value="created_asc">Creados antiguos</option>
+          </select>
+          <select
+            class="field-input canva-filter-select"
+            [(ngModel)]="canvaOwnership"
+            (ngModelChange)="onCanvaFiltersChange()"
+            [disabled]="canvaImportBusy()">
+            <option value="any">Todos</option>
+            <option value="owned">Propios</option>
+            <option value="shared">Compartidos</option>
+          </select>
+        </div>
+
+        <div class="canva-import-progress" *ngIf="canvaImportBusy()">
+          <span class="canva-import-progress-spinner" aria-hidden="true"></span>
+          <span>{{ canvaImportProgressLabel() }}</span>
+        </div>
+
+        <div class="canva-designs-state" *ngIf="canvaDesignsLoading && !canvaDesigns.length">
+          Cargando diseños…
+        </div>
+        <div class="canva-designs-state" *ngIf="!canvaDesignsLoading && canvaImportPhase === 'empty' && !canvaDesignQuery.trim()">
+          No hay diseños en tu cuenta de Canva.
+        </div>
+        <div class="canva-designs-state" *ngIf="!canvaDesignsLoading && !canvaDesigns.length && canvaDesignQuery.trim()">
+          No se encontraron diseños para «{{ canvaDesignQuery.trim() }}».
+        </div>
+
+        <div class="canva-designs-grid" *ngIf="canvaDesigns.length">
+          <button
+            type="button"
+            class="canva-design-card"
+            *ngFor="let design of canvaDesigns"
+            [class.selected]="isCanvaDesignSelected(design)"
+            [disabled]="canvaImportBusy()"
+            (click)="selectCanvaDesign(design)">
+            <div class="canva-design-thumb">
+              <img
+                *ngIf="design.thumbnailUrl"
+                [src]="design.thumbnailUrl"
+                alt=""
+                referrerpolicy="no-referrer" />
+              <span *ngIf="!design.thumbnailUrl" class="canva-design-thumb-fallback">CV</span>
+            </div>
+            <div class="canva-design-meta">
+              <strong>{{ design.title || 'Sin título' }}</strong>
+              <small *ngIf="design.updatedAt">{{ formatCanvaDesignDate(design.updatedAt) }}</small>
+            </div>
+          </button>
+        </div>
+
+        <div class="canva-load-more" *ngIf="canvaContinuation && canvaDesigns.length">
+          <button
+            type="button"
+            class="btn secondary btn-sm"
+            (click)="loadMoreCanvaDesigns()"
+            [disabled]="canvaDesignsLoadingMore || canvaImportBusy()">
+            {{ canvaDesignsLoadingMore ? 'Cargando…' : 'Cargar más' }}
+          </button>
+        </div>
+
+        <section class="canva-selection-panel" *ngIf="selectedCanvaDesign">
+          <p class="canva-selection-title">Diseño seleccionado</p>
+          <div class="canva-selection-row">
+            <div class="canva-design-thumb canva-selection-thumb">
+              <img
+                *ngIf="selectedCanvaDesign.thumbnailUrl"
+                [src]="selectedCanvaDesign.thumbnailUrl"
+                alt=""
+                referrerpolicy="no-referrer" />
+              <span *ngIf="!selectedCanvaDesign.thumbnailUrl" class="canva-design-thumb-fallback">CV</span>
+            </div>
+            <div class="canva-selection-text">
+              <strong>{{ selectedCanvaDesign.title || 'Sin título' }}</strong>
+              <small *ngIf="canvaImportPhase === 'loading_formats'">Cargando formatos…</small>
+            </div>
           </div>
-          <button type="button" class="btn secondary btn-sm" (click)="openGooglePicker()" [disabled]="pickerLoading">
+
+          <div class="canva-format-options" *ngIf="canvaExportFormats.length && canvaImportPhase !== 'loading_formats'">
+            <p class="canva-format-label">Formato de exportación</p>
+            <div class="canva-format-chips">
+              <button
+                type="button"
+                class="canva-format-chip"
+                *ngFor="let format of canvaExportFormats"
+                [class.active]="selectedCanvaFormat === format"
+                [disabled]="canvaImportBusy()"
+                (click)="selectCanvaFormat(format)">
+                {{ canvaFormatLabel(format) }}
+              </button>
+            </div>
+          </div>
+
+          <div class="optional-grid canva-optional-grid">
+            <div>
+              <label class="field-label">Nombre en la biblioteca</label>
+              <input
+                type="text"
+                class="field-input"
+                [(ngModel)]="integrationImportName"
+                placeholder="Ej. Banner campaña abril"
+                [disabled]="canvaImportBusy()" />
+            </div>
+            <div>
+              <label class="field-label">Etiquetas (separadas por coma)</label>
+              <input
+                type="text"
+                class="field-input"
+                [(ngModel)]="integrationImportTags"
+                placeholder="Ej. campaña, abril, instagram"
+                [disabled]="canvaImportBusy()" />
+              <p class="integration-tags-hint">Se añadirá la etiqueta «canva» automáticamente.</p>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="selected-file-card" *ngIf="selectedDriveFiles.length && integrationProvider !== 'canva'">
+        <p class="selected-file-title">
+          {{ selectedDriveFiles.length === 1 ? 'Archivo seleccionado' : (selectedDriveFiles.length + ' archivos seleccionados') }}
+        </p>
+
+        <div class="selected-file-row" *ngIf="selectedDriveFiles.length === 1 && primarySelectedDriveFile() as file">
+          <div class="selected-file-thumb" [class.loading]="file.previewLoading">
+            <img
+              *ngIf="file.thumbnailUrl && !file.previewLoading"
+              [src]="file.thumbnailUrl"
+              alt=""
+              referrerpolicy="no-referrer"
+              (error)="onDrivePreviewImageError(file)"
+            />
+            <span *ngIf="!file.thumbnailUrl || file.previewLoading">{{ integrationFileBadge() }}</span>
+          </div>
+          <div class="selected-file-text">
+            <strong>{{ file.name || integrationImportName || 'Archivo seleccionado' }}</strong>
+            <small>{{ file.mimeType || integrationFileTypeHint() }}</small>
+          </div>
+          <button type="button" class="btn secondary btn-sm" (click)="openIntegrationPicker()" [disabled]="pickerLoading">
             Cambiar archivo
+          </button>
+        </div>
+
+        <ul class="selected-drive-files-list" *ngIf="selectedDriveFiles.length > 1">
+          <li *ngFor="let file of selectedDriveFiles" class="selected-drive-file-item">
+            <div class="selected-drive-file-thumb" [class.loading]="file.previewLoading">
+              <img
+                *ngIf="file.thumbnailUrl && !file.previewLoading"
+                [src]="file.thumbnailUrl"
+                alt=""
+                referrerpolicy="no-referrer"
+                (error)="onDrivePreviewImageError(file)"
+              />
+              <span *ngIf="!file.thumbnailUrl || file.previewLoading">{{ integrationFileBadge() }}</span>
+            </div>
+            <div class="selected-drive-file-text">
+              <strong>{{ file.name }}</strong>
+              <small>{{ file.mimeType || integrationFileTypeHint() }}</small>
+            </div>
+          </li>
+        </ul>
+
+        <div class="selected-file-actions" *ngIf="selectedDriveFiles.length > 1">
+          <button type="button" class="btn secondary btn-sm" (click)="openIntegrationPicker()" [disabled]="pickerLoading">
+            Cambiar selección
           </button>
         </div>
       </section>
 
-      <section class="integration-optional-block" *ngIf="integrationFileId.trim()">
+      <section class="integration-optional-block" *ngIf="selectedDriveFiles.length && integrationProvider !== 'canva'">
         <p class="integration-optional-title">Detalles opcionales</p>
         <div class="optional-grid">
-          <div>
+          <div *ngIf="selectedDriveFiles.length === 1">
             <label class="field-label">Nombre en la biblioteca</label>
             <input type="text" class="field-input" [(ngModel)]="integrationImportName" placeholder="Ej. Banner campaña abril" />
           </div>
-          <div>
+          <div [class.optional-grid-full]="selectedDriveFiles.length > 1">
             <label class="field-label">Etiquetas (separadas por coma)</label>
             <input type="text" class="field-input" [(ngModel)]="integrationImportTags" placeholder="Ej. campaña, abril, instagram" />
+            <p class="integration-tags-hint" *ngIf="selectedDriveFiles.length > 1">
+              Se aplicarán a todos los archivos importados.
+            </p>
           </div>
         </div>
+      </section>
+
+      <section class="integration-batch-errors" *ngIf="integrationBatchFailures.length">
+        <p class="integration-batch-errors-title">Archivos no importados</p>
+        <ul class="integration-batch-errors-list">
+          <li *ngFor="let failure of integrationBatchFailures" class="integration-batch-error-item">
+            <strong>{{ failure.fileName }}</strong>
+            <span>{{ failure.message }}</span>
+          </li>
+        </ul>
       </section>
 
       <footer class="integration-footer">
@@ -589,11 +829,26 @@
         <div class="integration-footer-actions">
           <button type="button" class="btn secondary" (click)="closeImportModal()">Cancelar</button>
           <button
+            *ngIf="integrationProvider === 'canva'"
+            type="button"
+            class="btn primary"
+            (click)="importSelectedCanvaDesign()"
+            [disabled]="
+              canvaImportBusy() ||
+              oauthUiState !== 'connected' ||
+              !selectedCanvaDesign ||
+              !selectedCanvaFormat ||
+              canvaImportPhase === 'loading_formats'
+            ">
+            {{ integrationImportButtonLabel() }}
+          </button>
+          <button
+            *ngIf="integrationProvider !== 'canva'"
             type="button"
             class="btn primary"
             (click)="importFromProvider()"
-            [disabled]="importingExternal || oauthUiState !== 'connected' || !integrationFileId.trim()">
-            {{ importingExternal ? 'Importando…' : 'Importar a la biblioteca' }}
+            [disabled]="importingExternal || oauthUiState !== 'connected' || !selectedDriveFiles.length">
+            {{ integrationImportButtonLabel() }}
           </button>
         </div>
       </footer>

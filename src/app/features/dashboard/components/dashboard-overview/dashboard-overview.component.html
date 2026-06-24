@@ -111,7 +111,7 @@
                 [alt]="page.name"
                 class="avatar-img">
               <div *ngIf="!page.pictureUrl" class="avatar-placeholder">
-                {{ page.name.charAt(0).toUpperCase() }}
+                {{ getAccountInitial(page.name) }}
               </div>
             </div>
             <div class="page-info">
@@ -149,7 +149,7 @@
                 [alt]="group.name"
                 class="avatar-img">
               <div *ngIf="!group.pictureUrl" class="avatar-placeholder">
-                {{ group.name.charAt(0).toUpperCase() }}
+                {{ getAccountInitial(group.name) }}
               </div>
             </div>
             <div class="page-info">

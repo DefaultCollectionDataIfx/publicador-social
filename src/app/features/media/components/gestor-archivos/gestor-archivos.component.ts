@@ -1,38 +1,66 @@
 import { CommonModule } from '@angular/common';
-import { Component, ElementRef, HostListener, NgZone, OnDestroy, OnInit, ViewChild } from '@angular/core';
+import { Component, ElementRef, HostListener, NgZone, OnDestroy, OnInit, ViewChild, ChangeDetectorRef } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, ParamMap, Router } from '@angular/router';
-import { HttpErrorResponse } from '@angular/common/http';
-import { Subject, Subscription } from 'rxjs';
+import { HttpErrorResponse, HttpEventType } from '@angular/common/http';
+import { Subject, Subscription, firstValueFrom } from 'rxjs';
 import { debounceTime, distinctUntilChanged } from 'rxjs/operators';
 import {
   ComposerMediaService,
   MediaLibraryItemDto,
   MediaListSortParam,
-  IntegrationFileItemDto,
+  MediaUploadBatchResultDto,
+  MediaUploadBatchResultItemDto,
   IntegrationPickerTokenDto,
+  IntegrationFilePreviewDto,
+  ExternalImportBatchResultDto,
+  ExternalImportBatchResultItemDto,
   MediaFolderDto,
   MediaDetailDto
 } from '../../../scheduler/services/composer-media.service';
 import { extractErrorMessage } from '../../../../shared/utils/error.utils';
 import { MediaSelectionService } from '../../services/media-selection.service';
 import { GooglePickerService, PickedGoogleFile } from '../../services/google-picker.service';
+import { OneDrivePickerService, PickedOneDriveFile } from '../../services/onedrive-picker.service';
+import {
+  CanvaDesignDto,
+  CanvaDesignOwnership,
+  CanvaDesignSortBy,
+  CanvaExportFormat,
+  CanvaIntegrationService,
+  parseEnabledCanvaFormats
+} from '../../services/canva-integration.service';
 import { MediaImageEditorModalComponent } from '../media-image-editor-modal/media-image-editor-modal.component';
 
 /** Modo UI; `smart` se envía al API como orden servidor (`recently_used`). */
 type SortMode = 'smart' | MediaListSortParam;
 type Provider = 'google-drive' | 'onedrive' | 'canva';
 type OAuthUiState = 'disconnected' | 'connecting' | 'verifying_callback' | 'connected' | 'error';
-interface DriveFileUiItem {
-  fileId: string;
-  name: string;
-  mimeType?: string;
-  thumbnailUrl?: string;
-  modifiedTime?: string;
-  sizeBytes?: number;
+type LocalUploadPhase = 'uploading' | 'processing' | 'done' | 'error';
+type LocalUploadItemStatus = 'queued' | 'uploading' | 'processing' | 'success' | 'error';
+
+interface LocalUploadProgressItem {
+  fileName: string;
+  sizeBytes: number;
+  status: LocalUploadItemStatus;
+  detailMessage?: string;
 }
-type DriveTypeFilter = 'all' | 'image' | 'video' | 'document' | 'other';
-type DriveViewMode = 'grid' | 'list';
+
+interface SelectedDriveFileItem {
+  fileId: string;
+  driveId?: string;
+  name: string;
+  mimeType: string;
+  thumbnailUrl?: string;
+  iconUrl?: string;
+  thumbnailObjectUrl?: string;
+  previewLoading?: boolean;
+}
+
+interface IntegrationBatchFailureUi {
+  fileName: string;
+  message: string;
+}
 
 interface MediaAsset {
   mediaId: number;
@@ -74,6 +102,14 @@ type ImportModal =
 type GridDensity = 'comfortable' | 'standard' | 'compact';
 type FolderMenuContext = 'tree' | 'grid';
 type ToastTone = 'success' | 'error' | 'warn' | 'info';
+type CanvaImportPhase =
+  | 'idle'
+  | 'loading_designs'
+  | 'empty'
+  | 'loading_formats'
+  | 'exporting'
+  | 'waiting_export'
+  | 'importing';
 
 @Component({
   selector: 'app-gestor-archivos',
@@ -144,6 +180,11 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
 
   // Upload
   uploading = false;
+  showUploadProgress = false;
+  uploadPhase: LocalUploadPhase = 'uploading';
+  uploadBytesPercent = 0;
+  uploadProgressItems: LocalUploadProgressItem[] = [];
+  private uploadDismissTimeoutId: ReturnType<typeof setTimeout> | null = null;
   statusFilter: 'active' | 'archived' = 'active';
 
   // URL import / preview
@@ -179,7 +220,7 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
 
   // Integrations
   integrationProvider: Provider = 'google-drive';
-  integrationFileId = '';
+  selectedDriveFiles: SelectedDriveFileItem[] = [];
   integrationImportName = '';
   integrationImportTags = '';
   importingExternal = false;
@@ -189,19 +230,24 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
   integrationStatusLoading = false;
   integrationConnectedAt: string | null = null;
   integrationAccountEmail: string | null = null;
-  driveFiles: DriveFileUiItem[] = [];
-  driveFilesLoading = false;
-  driveQuery = '';
-  drivePage = 1;
-  drivePageSize = 12;
-  driveTotalPages = 1;
-  selectedDriveFile: DriveFileUiItem | null = null;
-  driveTypeFilter: DriveTypeFilter = 'all';
-  driveViewMode: DriveViewMode = 'grid';
+  integrationPickerBaseUrl: string | null = null;
   pickerLoading = false;
-  showDriveFallbackList = false;
-  selectedPickerFileName = '';
-  selectedPickerMimeType = '';
+  integrationBatchFailures: IntegrationBatchFailureUi[] = [];
+
+  // Canva
+  canvaDesigns: CanvaDesignDto[] = [];
+  canvaContinuation: string | null = null;
+  canvaDesignsLoading = false;
+  canvaDesignsLoadingMore = false;
+  canvaDesignQuery = '';
+  canvaSortBy: CanvaDesignSortBy = 'modified_desc';
+  canvaOwnership: CanvaDesignOwnership = 'any';
+  selectedCanvaDesign: CanvaDesignDto | null = null;
+  canvaExportFormats: CanvaExportFormat[] = [];
+  selectedCanvaFormat: CanvaExportFormat | null = null;
+  canvaImportPhase: CanvaImportPhase = 'idle';
+  private readonly canvaSearchInput$ = new Subject<string>();
+  private canvaSearchDebounceSub?: Subscription;
 
   // Inline editors
   showEditModal = false;
@@ -246,7 +292,10 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
     private readonly router: Router,
     private readonly mediaSelection: MediaSelectionService,
     private readonly googlePicker: GooglePickerService,
-    private readonly ngZone: NgZone
+    private readonly oneDrivePicker: OneDrivePickerService,
+    private readonly canvaIntegration: CanvaIntegrationService,
+    private readonly ngZone: NgZone,
+    private readonly cdr: ChangeDetectorRef
   ) {}
 
   ngOnInit(): void {
@@ -257,6 +306,14 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
       .subscribe(() => {
         this.page = 1;
         this.loadAssets();
+      });
+
+    this.canvaSearchDebounceSub = this.canvaSearchInput$
+      .pipe(debounceTime(350), distinctUntilChanged())
+      .subscribe(() => {
+        if (this.integrationProvider === 'canva' && this.oauthUiState === 'connected') {
+          this.loadCanvaDesigns();
+        }
       });
 
     const sub = this.route.queryParamMap.subscribe((params) => {
@@ -273,14 +330,19 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
       const folderIdParam = Number(params.get('folderId'));
       this.selectedFolderId = Number.isFinite(folderIdParam) && folderIdParam > 0 ? folderIdParam : null;
       const openImport = params.get('openImport');
-      if (openImport === 'google-drive' && this.importModal?.kind !== 'integration') {
-        this.openImportIntegration('google-drive', false);
+      if (
+        (openImport === 'google-drive' || openImport === 'onedrive' || openImport === 'canva') &&
+        this.importModal?.kind !== 'integration'
+      ) {
+        this.openImportIntegration(openImport as Provider, false);
         this.router.navigate([], {
           replaceUrl: true,
           queryParams: { openImport: null },
           queryParamsHandling: 'merge'
         });
       }
+      this.tryProcessOneDriveOAuthQuery(params);
+      this.tryProcessCanvaOAuthQuery(params);
       this.loadAssets();
       this.loadStorageSummary();
       this.loadFolders();
@@ -297,9 +359,15 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.teardownInfiniteScrollObserver();
     this.searchDebounceSub?.unsubscribe();
+    this.canvaSearchDebounceSub?.unsubscribe();
+    this.revokeAllThumbnailObjectUrls();
     if (this.toastTimeoutId) {
       clearTimeout(this.toastTimeoutId);
       this.toastTimeoutId = null;
+    }
+    if (this.uploadDismissTimeoutId) {
+      clearTimeout(this.uploadDismissTimeoutId);
+      this.uploadDismissTimeoutId = null;
     }
     this.subscriptions.unsubscribe();
   }
@@ -421,19 +489,11 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
   openImportIntegration(provider: Provider, autoConnectIfDisconnected = true): void {
     this.importMenuOpen = false;
     this.integrationProvider = provider;
-    this.integrationFileId = '';
+    this.clearSelectedDriveFiles();
+    this.resetCanvaImportState();
     this.integrationImportName = '';
     this.integrationImportTags = '';
-    this.driveFiles = [];
-    this.driveQuery = '';
-    this.drivePage = 1;
-    this.selectedDriveFile = null;
-    this.driveTypeFilter = 'all';
-    this.driveViewMode = 'grid';
     this.pickerLoading = false;
-    this.showDriveFallbackList = false;
-    this.selectedPickerFileName = '';
-    this.selectedPickerMimeType = '';
     if (this.oauthUiState === 'error') {
       this.oauthUiState = 'disconnected';
       this.oauthUiMessage = '';
@@ -443,9 +503,10 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
   }
 
   closeImportModal(): void {
+    this.revokeAllThumbnailObjectUrls();
+    this.resetCanvaImportState();
     this.importModal = null;
-    this.selectedPickerFileName = '';
-    this.selectedPickerMimeType = '';
+    this.clearSelectedDriveFiles();
   }
 
   private resetUrlImportForm(): void {
@@ -1213,34 +1274,260 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
 
   onUploadInput(ev: Event): void {
     const input = ev.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file) return;
-    this.uploadFile(file);
+    const files = input.files;
+    if (!files?.length) return;
+    this.uploadFiles(Array.from(files));
     input.value = '';
   }
 
-  private uploadFile(file: File): void {
+  private uploadFiles(files: File[]): void {
+    if (!files.length) return;
+    this.beginUploadProgress(files);
     this.uploading = true;
-    const sub = this.mediaApi.uploadMedia(file).subscribe({
-      next: (res) => {
-        this.uploading = false;
-        const status = res.data?.processingStatus;
-        if (status === 'pending') {
-          this.showToast('Archivo subido. Procesando miniatura/vista previa en segundo plano.', 'info');
-        } else if (status === 'failed') {
-          this.showToast('Archivo subido, pero falló el procesamiento de derivados.', 'warn');
-        } else {
-          this.clearToast();
-        }
-        this.loadAssets();
-        this.loadStorageSummary();
+
+    const sub = this.mediaApi.uploadMediaWithProgress(files).subscribe({
+      next: (event) => {
+        this.ngZone.run(() => {
+          if (event.type === HttpEventType.UploadProgress) {
+            const total = event.total ?? 0;
+            const loaded = event.loaded ?? 0;
+            this.uploadBytesPercent =
+              total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : this.uploadBytesPercent;
+
+            if (total > 0 && loaded >= total) {
+              this.uploadPhase = 'processing';
+              this.markUploadItemsStatus('processing');
+            } else {
+              this.uploadPhase = 'uploading';
+              this.markUploadItemsStatus('uploading');
+            }
+            this.cdr.markForCheck();
+            return;
+          }
+
+          if (event.type === HttpEventType.Response && event.body?.data) {
+            this.uploadBytesPercent = 100;
+            this.handleUploadBatchResult(event.body.data);
+          }
+        });
       },
-      error: (err) => {
-        this.uploading = false;
-        this.showToast(this.mapUploadError(err), 'error');
-      }
+      error: (err) => this.ngZone.run(() => this.handleUploadRequestError(err))
     });
     this.subscriptions.add(sub);
+  }
+
+  private beginUploadProgress(files: File[]): void {
+    if (this.uploadDismissTimeoutId) {
+      clearTimeout(this.uploadDismissTimeoutId);
+      this.uploadDismissTimeoutId = null;
+    }
+    this.showUploadProgress = true;
+    this.uploadPhase = 'uploading';
+    this.uploadBytesPercent = 0;
+    this.uploadProgressItems = files.map((file) => ({
+      fileName: file.name,
+      sizeBytes: file.size,
+      status: 'queued' as LocalUploadItemStatus
+    }));
+    this.markUploadItemsStatus('uploading');
+  }
+
+  dismissUploadProgress(): void {
+    if (this.uploadDismissTimeoutId) {
+      clearTimeout(this.uploadDismissTimeoutId);
+      this.uploadDismissTimeoutId = null;
+    }
+    this.showUploadProgress = false;
+    this.uploadProgressItems = [];
+    this.uploadBytesPercent = 0;
+    this.uploadPhase = 'uploading';
+  }
+
+  uploadProgressTitle(): string {
+    const count = this.uploadProgressItems.length;
+    switch (this.uploadPhase) {
+      case 'uploading':
+        return count === 1 ? 'Subiendo archivo…' : `Subiendo ${count} archivos…`;
+      case 'processing':
+        return 'Procesando en el servidor…';
+      case 'done': {
+        const ok = this.uploadProgressSuccessCount();
+        const fail = this.uploadProgressFailureCount();
+        if (fail === 0) {
+          return count === 1 ? 'Subida completada' : `${ok} archivos subidos`;
+        }
+        if (ok === 0) {
+          return count === 1 ? 'No se pudo subir el archivo' : 'Subida fallida';
+        }
+        return `Subida parcial (${ok}/${count})`;
+      }
+      case 'error':
+        return 'Error en la subida';
+      default:
+        return 'Subida';
+    }
+  }
+
+  uploadProgressSubtitle(): string {
+    const totalBytes = this.uploadProgressTotalBytes();
+    switch (this.uploadPhase) {
+      case 'uploading':
+        return `${this.uploadBytesPercent}% · ${this.formatBytes(totalBytes)}`;
+      case 'processing':
+        return 'Validando archivos y generando miniaturas…';
+      case 'done': {
+        const fail = this.uploadProgressFailureCount();
+        if (fail > 0) {
+          return `${fail} archivo(s) con error. Revisa el detalle abajo.`;
+        }
+        const pending = this.uploadProgressItems.filter(
+          (item) => item.status === 'success' && item.detailMessage?.includes('segundo plano')
+        ).length;
+        if (pending > 0) {
+          return pending === 1
+            ? 'Miniatura en proceso en segundo plano.'
+            : `${pending} archivos con derivados en segundo plano.`;
+        }
+        return 'Todos los archivos están listos.';
+      }
+      case 'error':
+        return 'Revisa el mensaje de cada archivo.';
+      default:
+        return '';
+    }
+  }
+
+  uploadProgressTotalBytes(): number {
+    return this.uploadProgressItems.reduce((sum, item) => sum + item.sizeBytes, 0);
+  }
+
+  uploadProgressSuccessCount(): number {
+    return this.uploadProgressItems.filter((item) => item.status === 'success').length;
+  }
+
+  uploadProgressFailureCount(): number {
+    return this.uploadProgressItems.filter((item) => item.status === 'error').length;
+  }
+
+  uploadItemStatusLabel(item: LocalUploadProgressItem): string {
+    if (item.detailMessage?.trim()) {
+      return item.detailMessage.trim();
+    }
+    switch (item.status) {
+      case 'queued':
+        return 'En cola';
+      case 'uploading':
+        return 'Enviando…';
+      case 'processing':
+        return 'Procesando…';
+      case 'success':
+        return 'Listo';
+      case 'error':
+        return 'Error';
+      default:
+        return '';
+    }
+  }
+
+  private markUploadItemsStatus(status: LocalUploadItemStatus): void {
+    for (const item of this.uploadProgressItems) {
+      item.status = status;
+      item.detailMessage = undefined;
+    }
+  }
+
+  private handleUploadRequestError(err: unknown): void {
+    this.uploading = false;
+    this.uploadPhase = 'error';
+    this.uploadBytesPercent = 0;
+    const message = this.mapUploadError(err);
+    for (const item of this.uploadProgressItems) {
+      item.status = 'error';
+      item.detailMessage = message;
+    }
+    this.cdr.markForCheck();
+  }
+
+  private handleUploadBatchResult(data: MediaUploadBatchResultDto): void {
+    this.uploading = false;
+    this.uploadPhase = 'done';
+    this.applyUploadBatchResultsToPanel(data);
+
+    if (data.processed > 0) {
+      this.loadAssets();
+      this.loadStorageSummary();
+    }
+
+    if (this.uploadProgressFailureCount() === 0) {
+      this.scheduleUploadProgressDismiss();
+    }
+    this.cdr.markForCheck();
+  }
+
+  private applyUploadBatchResultsToPanel(data: MediaUploadBatchResultDto): void {
+    const results = data.results ?? [];
+    const matched = new Set<number>();
+
+    for (let i = 0; i < this.uploadProgressItems.length; i++) {
+      const ui = this.uploadProgressItems[i];
+      let result = results[i];
+      if (!result || (result.fileName && result.fileName !== ui.fileName)) {
+        const idx = results.findIndex((item, ri) => !matched.has(ri) && item.fileName === ui.fileName);
+        result = idx >= 0 ? results[idx] : result;
+        if (idx >= 0) {
+          matched.add(idx);
+        }
+      } else {
+        matched.add(i);
+      }
+
+      if (result?.ok && result.data) {
+        const processing = result.data.processingStatus;
+        if (processing === 'failed') {
+          ui.status = 'error';
+          ui.detailMessage = 'Subido, pero falló el procesamiento de derivados.';
+        } else {
+          ui.status = 'success';
+          ui.detailMessage =
+            processing === 'pending'
+              ? 'Subido · miniatura en segundo plano'
+              : 'Subido correctamente';
+        }
+        continue;
+      }
+
+      if (result && !result.ok) {
+        ui.status = 'error';
+        ui.detailMessage = this.mapUploadBatchItemMessage(result);
+        continue;
+      }
+
+      ui.status = 'error';
+      ui.detailMessage = 'Sin respuesta del servidor.';
+    }
+  }
+
+  private scheduleUploadProgressDismiss(): void {
+    if (this.uploadDismissTimeoutId) {
+      clearTimeout(this.uploadDismissTimeoutId);
+    }
+    this.uploadDismissTimeoutId = setTimeout(() => {
+      this.uploadDismissTimeoutId = null;
+      if (this.uploadPhase === 'done' && this.uploadProgressFailureCount() === 0) {
+        this.dismissUploadProgress();
+        this.cdr.markForCheck();
+      }
+    }, 6000);
+  }
+
+  private mapUploadBatchItemMessage(item?: MediaUploadBatchResultItemDto): string {
+    if (!item) return 'No se pudo subir el archivo.';
+    if (item.message?.trim()) return item.message.trim();
+    const code = String(item.code ?? '').toUpperCase();
+    if (code === 'MEDIA_TOO_LARGE') return 'El archivo supera el tamaño máximo permitido.';
+    if (code === 'MEDIA_INVALID_TYPE') return 'Tipo de archivo no permitido.';
+    if (code === 'MEDIA_QUOTA_EXCEEDED') return 'No hay espacio disponible en tu cuota de almacenamiento.';
+    return `No se pudo subir ${item.fileName || 'el archivo'}.`;
   }
 
   private mapUploadError(err: unknown): string {
@@ -1456,6 +1743,9 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
     }
     if (s === 'import-url' || s === 'import_url' || s === 'import') {
       return 'Importación por URL';
+    }
+    if (s === 'canva') {
+      return 'Canva';
     }
     return raw;
   }
@@ -1841,7 +2131,7 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
       return;
     }
     this.oauthUiState = 'connecting';
-    this.oauthUiMessage = 'Conectando con Google...';
+    this.oauthUiMessage = `Conectando con ${this.integrationProviderLabel()}…`;
     const sub = this.mediaApi.startOAuth(this.integrationProvider).subscribe({
       next: (res) => {
         const url = res.data.authorizationUrl;
@@ -1876,48 +2166,152 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
   }
 
   importFromProvider(): void {
-    const fileId = this.integrationFileId.trim();
-    if (!fileId) {
-      this.showToast('Selecciona un archivo para importar.', 'warn');
+    if (!this.selectedDriveFiles.length) {
+      this.showToast('Selecciona al menos un archivo para importar.', 'warn');
       return;
     }
-    this.importingExternal = true;
     const tags = this.integrationImportTags
       .split(',')
       .map((t) => t.trim())
       .filter(Boolean);
+    this.importingExternal = true;
+
+    if (this.selectedDriveFiles.length === 1) {
+      const file = this.selectedDriveFiles[0];
+      const sub = this.mediaApi
+        .importFromProvider(this.integrationProvider, {
+          fileId: file.fileId,
+          driveId: file.driveId,
+          name: this.integrationImportName.trim() || file.name || undefined,
+          tags: tags.length ? tags : undefined
+        })
+        .subscribe({
+          next: () => this.handleIntegrationImportSuccess('Archivo importado correctamente.', 'success'),
+          error: (err) => this.handleIntegrationImportError(err)
+        });
+      this.subscriptions.add(sub);
+      return;
+    }
+
     const sub = this.mediaApi
-      .importFromProvider(this.integrationProvider, {
-        fileId,
-        name: this.integrationImportName.trim() || undefined,
+      .importFromProviderBatch(this.integrationProvider, {
+        files: this.selectedDriveFiles.map((file) => ({
+          fileId: file.fileId,
+          driveId: file.driveId,
+          name: file.name || undefined
+        })),
         tags: tags.length ? tags : undefined
       })
       .subscribe({
-        next: () => {
-          this.importingExternal = false;
-          this.oauthUiState = 'connected';
-          this.oauthUiMessage = 'Google Drive conectado correctamente.';
-          this.showToast('Archivo importado correctamente.', 'success');
-          this.integrationFileId = '';
-          this.integrationImportName = '';
-          this.integrationImportTags = '';
-          this.selectedPickerFileName = '';
-          this.selectedPickerMimeType = '';
-          this.selectedDriveFile = null;
-          this.loadDriveFiles(false);
-          this.loadAssets();
-          this.loadStorageSummary();
-        },
-        error: (err) => {
-          this.importingExternal = false;
-          this.showToast(extractErrorMessage(err, 'No se pudo importar desde integración.'), 'error');
-          if (this.getHttpStatus(err) === 412) {
-            this.oauthUiState = 'disconnected';
-            this.oauthUiMessage = 'Integracion no conectada. Conecta Google Drive para continuar.';
-          }
-        }
+        next: (res) => this.handleIntegrationBatchImportResult(res.data),
+        error: (err) => this.handleIntegrationImportError(err)
       });
     this.subscriptions.add(sub);
+  }
+
+  private handleIntegrationImportSuccess(message: string, type: 'success' | 'warn', clearSelection = true): void {
+    this.importingExternal = false;
+    this.oauthUiState = 'connected';
+    this.oauthUiMessage = `${this.integrationProviderLabel()} conectado correctamente.`;
+    this.showToast(message, type);
+    if (clearSelection) {
+      this.clearSelectedDriveFiles();
+      this.integrationImportName = '';
+      this.integrationImportTags = '';
+    }
+    this.loadAssets();
+    this.loadStorageSummary();
+  }
+
+  private handleIntegrationBatchImportResult(data: ExternalImportBatchResultDto): void {
+    this.importingExternal = false;
+    const failedItems = (data.results ?? []).filter((item) => !item.ok);
+    const fileNameById = new Map(this.selectedDriveFiles.map((file) => [file.fileId, file.name]));
+    this.integrationBatchFailures = failedItems.map((item) => ({
+      fileName: fileNameById.get(item.fileId) || item.fileId,
+      message: this.mapIntegrationBatchItemMessage(item)
+    }));
+
+    if (data.processed > 0) {
+      const failedIds = new Set(failedItems.map((item) => item.fileId));
+      this.selectedDriveFiles = this.selectedDriveFiles.filter((file) => failedIds.has(file.fileId));
+      const toastType = data.failed > 0 ? 'warn' : 'success';
+      const message =
+        data.failed > 0
+          ? `Importación: ${data.processed} correctos, ${data.failed} fallidos.`
+          : `Importación: ${data.processed} archivos importados correctamente.`;
+      this.handleIntegrationImportSuccess(message, toastType, data.failed === 0);
+      return;
+    }
+
+    const allQuotaExceeded =
+      failedItems.length > 0 &&
+      failedItems.every((item) => String(item.code ?? '').toUpperCase() === 'MEDIA_QUOTA_EXCEEDED');
+    if (allQuotaExceeded) {
+      this.showToast(
+        failedItems[0]?.message?.trim() || 'No hay espacio disponible en tu cuota de almacenamiento.',
+        'error'
+      );
+    } else {
+      this.showToast(`No se importó ningún archivo (${data.failed} fallidos).`, 'error');
+    }
+    this.loadStorageSummary();
+  }
+
+  private handleIntegrationImportError(err: unknown): void {
+    this.importingExternal = false;
+    this.showToast(this.mapIntegrationImportError(err as HttpErrorResponse), 'error');
+    if (this.getHttpStatus(err) === 412) {
+      this.oauthUiState = 'disconnected';
+      this.oauthUiMessage = `Integración no conectada. Conecta ${this.integrationProviderLabel()} para continuar.`;
+    }
+  }
+
+  private mapIntegrationImportError(err: HttpErrorResponse): string {
+    const code = String((err?.error as { code?: string } | null)?.code ?? '').toUpperCase();
+    if (err?.status === 413 || code === 'MEDIA_TOO_LARGE') {
+      return 'El archivo supera el tamaño máximo permitido.';
+    }
+    if (err?.status === 415 || code === 'MEDIA_INVALID_TYPE') {
+      return 'Tipo de archivo no permitido para la biblioteca.';
+    }
+    if (err?.status === 403 || code === 'MEDIA_QUOTA_EXCEEDED') {
+      return err?.error?.message?.trim() || 'No hay espacio disponible en tu cuota de almacenamiento.';
+    }
+    if (err?.status === 404 || code === 'ONEDRIVE_FILE_NOT_FOUND') {
+      return 'Archivo no encontrado en OneDrive.';
+    }
+    if (err?.status === 412 || code === 'INTEGRATION_NOT_CONNECTED') {
+      return `Integración no conectada. Conecta ${this.integrationProviderLabel()} para continuar.`;
+    }
+    return extractErrorMessage(err, 'No se pudo importar desde integración.');
+  }
+
+  private mapIntegrationBatchItemMessage(item: ExternalImportBatchResultItemDto): string {
+    if (item.message?.trim()) return item.message.trim();
+    const code = String(item.code ?? '').toUpperCase();
+    if (code === 'MEDIA_QUOTA_EXCEEDED') {
+      return 'No hay espacio disponible en tu cuota de almacenamiento.';
+    }
+    if (code === 'MEDIA_TOO_LARGE') {
+      return 'El archivo supera el tamaño máximo permitido.';
+    }
+    if (code === 'MEDIA_INVALID_TYPE') {
+      return 'Tipo de archivo no permitido para la biblioteca.';
+    }
+    if (code === 'ONEDRIVE_FILE_NOT_FOUND') {
+      return 'Archivo no encontrado en OneDrive.';
+    }
+    if (code === 'INTEGRATION_NOT_CONNECTED') {
+      return `Integración no conectada. Conecta ${this.integrationProviderLabel()} para continuar.`;
+    }
+    return 'No se pudo importar el archivo.';
+  }
+
+  private clearSelectedDriveFiles(): void {
+    this.revokeAllThumbnailObjectUrls();
+    this.selectedDriveFiles = [];
+    this.integrationBatchFailures = [];
   }
 
   private getHttpStatus(err: unknown): number | null {
@@ -1930,8 +2324,16 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
     if (status === 401) return 'Sesion expirada. Inicia sesion nuevamente.';
     if (status === 403) return 'Sin acceso al tenant activo. Verifica permisos e intenta otra vez.';
     if (status === 400) return 'Autorizacion invalida o expirada. Reinicia la conexion.';
-    if (status === 502) return 'Google no respondio correctamente. Reintenta la conexion.';
-    return 'No se pudo completar la conexion. Intenta nuevamente.';
+    if (status === 502) {
+      if (this.integrationProvider === 'onedrive') {
+        return 'Microsoft no respondió correctamente. Reintenta la conexión.';
+      }
+      if (this.integrationProvider === 'canva') {
+        return 'Canva no respondió correctamente. Reintenta la conexión.';
+      }
+      return 'Google no respondio correctamente. Reintenta la conexion.';
+    }
+    return `No se pudo conectar ${this.integrationProviderLabel()}. Intenta nuevamente.`;
   }
 
   refreshIntegrationStatus(
@@ -1946,23 +2348,26 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
         this.integrationStatusLoading = false;
         this.integrationConnectedAt = data.connectedAt ?? null;
         this.integrationAccountEmail = data.accountEmail ?? null;
+        this.integrationPickerBaseUrl =
+          data.pickerBaseUrl?.trim() || data.sharePointBaseUrl?.trim() || this.integrationPickerBaseUrl;
         this.oauthUiState = data.connected ? 'connected' : 'disconnected';
         this.oauthUiMessage = data.connected
-          ? 'Google Drive conectado correctamente.'
-          : 'Aun no hay conexion activa con Google Drive.';
+          ? `${this.integrationTitle(provider)} conectado correctamente.`
+          : `Aún no hay conexión activa con ${this.integrationTitle(provider)}.`;
         if (!data.connected && autoConnectIfDisconnected && provider === 'google-drive') {
           this.startOAuth();
         }
-        if (!(data.connected && provider === 'google-drive')) {
-          this.driveFiles = [];
-          this.selectedDriveFile = null;
-          this.integrationFileId = '';
+        if (!data.connected) {
+          this.clearSelectedDriveFiles();
+          if (provider === 'canva') {
+            this.resetCanvaImportState();
+          }
         }
         if (fromCallback) {
           this.showToast(
             data.connected
-              ? `Conexión con ${provider} completada.`
-              : `No se confirmó conexión activa con ${provider}.`,
+              ? `${this.integrationTitle(provider)} conectado correctamente.`
+              : `No se confirmó conexión activa con ${this.integrationTitle(provider)}.`,
             data.connected ? 'success' : 'warn'
           );
           this.router.navigate(['/dashboard/archivos'], {
@@ -1970,7 +2375,11 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
             queryParams: {
               mode: this.selectionMode ? 'select' : null,
               status: this.statusFilter,
-              openImport: provider === 'google-drive' && data.connected ? 'google-drive' : null,
+              openImport:
+                data.connected &&
+                (provider === 'google-drive' || provider === 'onedrive' || provider === 'canva')
+                  ? provider
+                  : null,
               code: null,
               state: null,
               iss: null,
@@ -1978,6 +2387,9 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
             },
             queryParamsHandling: 'merge'
           });
+        }
+        if (provider === 'canva' && data.connected && this.importModal?.kind === 'integration') {
+          this.loadCanvaDesigns();
         }
       },
       error: (err) => {
@@ -1998,16 +2410,14 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
   disconnectDrive(): void {
     const sub = this.mediaApi.disconnectIntegration(this.integrationProvider).subscribe({
       next: () => {
-        this.integrationFileId = '';
+        this.clearSelectedDriveFiles();
+        this.resetCanvaImportState();
         this.integrationImportName = '';
         this.integrationImportTags = '';
         this.oauthUiState = 'disconnected';
         this.oauthUiMessage = 'Integracion desconectada.';
         this.integrationConnectedAt = null;
         this.integrationAccountEmail = null;
-        this.driveFiles = [];
-        this.selectedDriveFile = null;
-        this.integrationFileId = '';
         this.showToast('Integración desconectada.', 'success');
       },
       error: (err) => {
@@ -2017,66 +2427,16 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
     this.subscriptions.add(sub);
   }
 
-  loadDriveFiles(resetPage = false): void {
-    if (this.integrationProvider !== 'google-drive') return;
-    if (this.oauthUiState !== 'connected') return;
-    if (resetPage) {
-      this.drivePage = 1;
+  openIntegrationPicker(): void {
+    if (this.integrationProvider === 'onedrive') {
+      this.openOneDrivePicker();
+      return;
     }
-    this.driveFilesLoading = true;
-    const sub = this.mediaApi
-      .listIntegrationFiles('google-drive', {
-        q: this.driveQuery,
-        page: this.drivePage,
-        pageSize: this.drivePageSize
-      })
-      .subscribe({
-        next: (res) => {
-          const list = Array.isArray(res.data) ? res.data : [];
-          this.driveFiles = list.map((x) => this.mapDriveFile(x));
-          this.driveTotalPages = Math.max(1, Number(res.meta?.totalPages ?? 1));
-          this.driveFilesLoading = false;
-          this.showDriveFallbackList = true;
-        },
-        error: (err) => {
-          this.driveFilesLoading = false;
-          if (this.getHttpStatus(err) === 412) {
-            this.oauthUiState = 'disconnected';
-            this.oauthUiMessage = 'Integracion no conectada. Vuelve a conectar Google Drive.';
-          }
-          this.showToast(extractErrorMessage(err, 'No se pudo cargar el listado de Google Drive.'), 'error');
-        }
-      });
-    this.subscriptions.add(sub);
-  }
-
-  searchDriveFiles(): void {
-    this.loadDriveFiles(true);
-  }
-
-  prevDrivePage(): void {
-    if (this.drivePage <= 1) return;
-    this.drivePage--;
-    this.loadDriveFiles(false);
-  }
-
-  nextDrivePage(): void {
-    if (this.drivePage >= this.driveTotalPages) return;
-    this.drivePage++;
-    this.loadDriveFiles(false);
-  }
-
-  selectDriveFile(file: DriveFileUiItem): void {
-    this.selectedDriveFile = file;
-    this.integrationFileId = file.fileId;
-    if (!this.integrationImportName.trim()) {
-      this.integrationImportName = file.name;
+    if (this.integrationProvider === 'google-drive') {
+      this.openGooglePicker();
+      return;
     }
-  }
-
-  onDriveFileDoubleClick(file: DriveFileUiItem): void {
-    this.selectDriveFile(file);
-    this.importFromProvider();
+    this.showToast('Este proveedor aún no tiene selector de archivos disponible.', 'warn');
   }
 
   openGooglePicker(): void {
@@ -2093,13 +2453,17 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
             })
           )
           .then((picked) => {
-            this.pickerLoading = false;
-            if (!picked) return;
-            this.applyPickedFileAndImport(picked);
+            this.ngZone.run(() => {
+              this.pickerLoading = false;
+              if (!picked?.length) return;
+              this.applyPickedFiles(picked);
+            });
           })
           .catch((err: unknown) => {
-            this.pickerLoading = false;
-            this.showToast(extractErrorMessage(err as any, 'No se pudo abrir Google Picker.'), 'error');
+            this.ngZone.run(() => {
+              this.pickerLoading = false;
+              this.showToast(extractErrorMessage(err as any, 'No se pudo abrir Google Picker.'), 'error');
+            });
           });
       },
       error: (err) => {
@@ -2110,6 +2474,102 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
     this.subscriptions.add(sub);
   }
 
+  openOneDrivePicker(): void {
+    this.pickerLoading = true;
+    const sub = this.mediaApi.getIntegrationPickerToken('onedrive').subscribe({
+      next: (res) => {
+        const tokenData = res.data;
+        if (tokenData.pickerBaseUrl?.trim()) {
+          this.integrationPickerBaseUrl = tokenData.pickerBaseUrl.trim();
+        }
+        const baseUrl = this.resolveOneDrivePickerBaseUrl(tokenData);
+        if (!baseUrl) {
+          this.pickerLoading = false;
+          this.showToast(
+            'No se pudo determinar la URL de OneDrive para el selector. Configura window.__ONEDRIVE_BASE_URL__ (https://{tenant}-my.sharepoint.com) o contacta soporte.',
+            'error'
+          );
+          return;
+        }
+
+        const getToken = (resource: string) =>
+          firstValueFrom(this.mediaApi.getIntegrationPickerToken('onedrive', resource)).then((tokenRes) => {
+            const token = tokenRes.data.oauthToken?.trim();
+            if (!token) {
+              throw new Error(`El backend no devolvió token para el recurso ${resource}.`);
+            }
+            return token;
+          });
+
+        getToken(baseUrl)
+          .then((initialToken) =>
+            this.oneDrivePicker.openPicker({
+              baseUrl,
+              initialToken,
+              getToken
+            })
+          )
+          .then((picked) => {
+            this.ngZone.run(() => {
+              this.pickerLoading = false;
+              if (!picked?.length) return;
+              this.applyPickedOneDriveFiles(picked);
+            });
+          })
+          .catch((err: unknown) => {
+            this.ngZone.run(() => {
+              this.pickerLoading = false;
+              this.showToast(extractErrorMessage(err as any, 'No se pudo abrir OneDrive File Picker.'), 'error');
+            });
+          });
+      },
+      error: (err) => {
+        this.pickerLoading = false;
+        this.showToast(extractErrorMessage(err, 'No se pudo obtener token para OneDrive File Picker.'), 'error');
+      }
+    });
+    this.subscriptions.add(sub);
+  }
+
+  /** File Picker v8 exige URL SharePoint y token con audiencia de ese host (no Graph). */
+  private resolveOneDrivePickerBaseUrl(tokenData: IntegrationPickerTokenDto): string | null {
+    const explicit =
+      tokenData.pickerBaseUrl?.trim() ||
+      this.integrationPickerBaseUrl?.trim() ||
+      this.resolveOneDriveBaseUrl();
+    if (explicit) {
+      return explicit.replace(/\/+$/, '');
+    }
+
+    const resource = tokenData.resource?.trim();
+    if (resource && this.isSharePointPickerHost(resource)) {
+      return resource.replace(/\/+$/, '');
+    }
+
+    return this.deriveSharePointBaseUrlFromEmail(this.integrationAccountEmail);
+  }
+
+  private isSharePointPickerHost(resource: string): boolean {
+    const lower = resource.toLowerCase();
+    if (lower.includes('graph.microsoft.com')) return false;
+    if (lower.includes('login.microsoftonline.com')) return false;
+    return lower.includes('sharepoint.com') || lower.includes('onedrive.live.com');
+  }
+
+  private deriveSharePointBaseUrlFromEmail(email: string | null): string | null {
+    if (!email?.includes('@')) return null;
+    const domainPart = email.split('@')[1]?.trim().toLowerCase();
+    if (!domainPart) return null;
+    const tenantSlug = domainPart.split('.')[0];
+    if (!tenantSlug) return null;
+    return `https://${tenantSlug}-my.sharepoint.com`;
+  }
+
+  private resolveOneDriveBaseUrl(): string | null {
+    const fromWindow = (window as unknown as { __ONEDRIVE_BASE_URL__?: string }).__ONEDRIVE_BASE_URL__;
+    return typeof fromWindow === 'string' && fromWindow.trim() ? fromWindow.trim().replace(/\/+$/, '') : null;
+  }
+
   private resolvePickerApiKey(token: IntegrationPickerTokenDto): Promise<string> {
     if (token.apiKey?.trim()) return Promise.resolve(token.apiKey.trim());
     const fromWindow = (window as unknown as { __GOOGLE_PICKER_API_KEY__?: string }).__GOOGLE_PICKER_API_KEY__;
@@ -2117,58 +2577,273 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
     return Promise.reject(new Error('No hay apiKey para Google Picker.'));
   }
 
-  private applyPickedFileAndImport(file: PickedGoogleFile): void {
-    if (!file.fileId) return;
-    this.integrationFileId = file.fileId;
-    this.selectedPickerFileName = file.name?.trim() || 'Archivo seleccionado';
-    this.selectedPickerMimeType = file.mimeType?.trim() || '';
-    if (!this.integrationImportName.trim()) {
-      this.integrationImportName = file.name?.trim() || 'Archivo de Google Drive';
+  private applyPickedFiles(files: PickedGoogleFile[]): void {
+    const { files: capped, truncated } = GooglePickerService.dedupeAndCap(files);
+    this.applyPickedIntegrationFiles(
+      capped.map((file) => ({
+        fileId: file.fileId,
+        name: file.name,
+        mimeType: file.mimeType
+      })),
+      truncated
+    );
+  }
+
+  private applyPickedOneDriveFiles(files: PickedOneDriveFile[]): void {
+    const { files: capped, truncated } = OneDrivePickerService.dedupeAndCap(files);
+    this.applyPickedIntegrationFiles(
+      capped.map((file) => ({
+        fileId: file.fileId,
+        driveId: file.driveId,
+        name: file.name,
+        mimeType: file.mimeType
+      })),
+      truncated
+    );
+  }
+
+  private applyPickedIntegrationFiles(
+    files: Array<{ fileId: string; driveId?: string; name?: string; mimeType?: string }>,
+    truncated: boolean
+  ): void {
+    if (!files.length) return;
+    if (truncated) {
+      this.showToast('Solo se pueden importar hasta 50 archivos por lote. Se tomaron los primeros 50.', 'warn');
+    }
+    this.selectedDriveFiles = files.map((file) => ({
+      fileId: file.fileId,
+      driveId: file.driveId,
+      name: file.name?.trim() || 'Archivo seleccionado',
+      mimeType: file.mimeType?.trim() || '',
+      thumbnailUrl: undefined,
+      iconUrl: undefined,
+      thumbnailObjectUrl: undefined,
+      previewLoading: false
+    }));
+    this.integrationBatchFailures = [];
+    this.integrationImportName = files.length === 1 ? files[0].name?.trim() || '' : '';
+    this.loadSelectedDriveFilesPreview();
+  }
+
+  private previewItemKey(fileId: string, driveId?: string): string {
+    return `${driveId?.trim() || ''}:${fileId.trim()}`;
+  }
+
+  private loadSelectedDriveFilesPreview(): void {
+    const items = this.selectedDriveFiles.filter((file) => file.fileId.trim());
+    if (!items.length) return;
+
+    for (const item of items) {
+      item.previewLoading = true;
+      this.revokeItemThumbnailObjectUrl(item);
+      item.thumbnailUrl = undefined;
+    }
+
+    const provider = this.integrationProvider;
+    const sub = this.mediaApi
+      .getIntegrationFilePreviewBatch(provider, {
+        files: items.map((file) => ({
+          fileId: file.fileId,
+          driveId: file.driveId
+        }))
+      })
+      .subscribe({
+        next: (res) => {
+          this.ngZone.run(() => {
+            const results = res.data?.results ?? [];
+            const previewByKey = new Map<string, IntegrationFilePreviewDto>();
+            for (const result of results) {
+              if (!result.ok || !result.data) continue;
+              previewByKey.set(
+                this.previewItemKey(result.fileId, result.driveId ?? result.data.driveId),
+                result.data
+              );
+            }
+
+            for (const item of items) {
+              const data =
+                previewByKey.get(this.previewItemKey(item.fileId, item.driveId)) ??
+                results.find((result) => result.ok && result.data?.fileId === item.fileId)?.data;
+              if (!data) {
+                item.previewLoading = false;
+                continue;
+              }
+              this.applyIntegrationPreviewMetadata(item, data);
+              item.iconUrl = data.iconUrl?.trim() || undefined;
+              if (provider === 'onedrive' && data.thumbnailUrl) {
+                this.loadIntegrationThumbnailBlob(item, provider, item.fileId, item.driveId);
+                continue;
+              }
+              item.previewLoading = false;
+              item.thumbnailUrl = data.thumbnailUrl?.trim() || item.iconUrl;
+            }
+
+            if (items.length === 1 && !this.integrationImportName.trim() && items[0].name) {
+              this.integrationImportName = items[0].name;
+            }
+
+            this.selectedDriveFiles = [...this.selectedDriveFiles];
+            this.cdr.markForCheck();
+          });
+        },
+        error: (err) => {
+          this.ngZone.run(() => {
+            for (const item of items) {
+              item.previewLoading = false;
+            }
+            this.selectedDriveFiles = [...this.selectedDriveFiles];
+            this.cdr.markForCheck();
+            if (this.getHttpStatus(err) === 412) {
+              this.oauthUiState = 'disconnected';
+              this.oauthUiMessage = `Integración no conectada. Vuelve a conectar ${this.integrationProviderLabel()}.`;
+            }
+          });
+        }
+      });
+    this.subscriptions.add(sub);
+  }
+
+  private applyIntegrationPreviewMetadata(item: SelectedDriveFileItem, data: IntegrationFilePreviewDto): void {
+    if (data.name?.trim()) {
+      item.name = data.name.trim();
+    }
+    if (data.mimeType?.trim()) {
+      item.mimeType = data.mimeType.trim();
+    }
+    if (data.driveId?.trim()) {
+      item.driveId = data.driveId.trim();
     }
   }
 
-  setDriveTypeFilter(filter: DriveTypeFilter): void {
-    this.driveTypeFilter = filter;
+  private loadIntegrationThumbnailBlob(
+    item: SelectedDriveFileItem,
+    provider: string,
+    fileId: string,
+    driveId?: string
+  ): void {
+    const sub = this.mediaApi.getIntegrationFileThumbnail(provider, fileId, driveId).subscribe({
+      next: (blob) => {
+        this.ngZone.run(() => {
+          item.previewLoading = false;
+          this.revokeItemThumbnailObjectUrl(item);
+          item.thumbnailObjectUrl = URL.createObjectURL(blob);
+          item.thumbnailUrl = item.thumbnailObjectUrl;
+          if (this.selectedDriveFiles.length === 1 && !this.integrationImportName.trim() && item.name) {
+            this.integrationImportName = item.name;
+          }
+          this.selectedDriveFiles = [...this.selectedDriveFiles];
+          this.cdr.markForCheck();
+        });
+      },
+      error: () => {
+        this.ngZone.run(() => {
+          item.previewLoading = false;
+          item.thumbnailUrl = item.iconUrl;
+          this.selectedDriveFiles = [...this.selectedDriveFiles];
+          this.cdr.markForCheck();
+        });
+      }
+    });
+    this.subscriptions.add(sub);
   }
 
-  setDriveViewMode(mode: DriveViewMode): void {
-    this.driveViewMode = mode;
-  }
+  private tryProcessCanvaOAuthQuery(params: ParamMap): void {
+    const canvaConnected = params.get('canvaConnected');
+    if (canvaConnected === null) return;
 
-  get visibleDriveFiles(): DriveFileUiItem[] {
-    return this.driveFiles.filter((f) => this.matchesDriveTypeFilter(f));
-  }
+    const success = canvaConnected === '1';
+    const errorCode = params.get('canvaError')?.trim();
+    this.showToast(
+      success
+        ? 'Canva conectado correctamente.'
+        : errorCode
+          ? `No se pudo conectar Canva (${errorCode}).`
+          : 'No se pudo conectar Canva.',
+      success ? 'success' : 'error'
+    );
 
-  private matchesDriveTypeFilter(file: DriveFileUiItem): boolean {
-    if (this.driveTypeFilter === 'all') return true;
-    const mime = (file.mimeType || '').toLowerCase();
-    if (this.driveTypeFilter === 'image') return mime.startsWith('image/');
-    if (this.driveTypeFilter === 'video') return mime.startsWith('video/');
-    if (this.driveTypeFilter === 'document') {
-      return (
-        mime.includes('pdf') ||
-        mime.includes('document') ||
-        mime.includes('sheet') ||
-        mime.includes('presentation') ||
-        mime.includes('text/')
-      );
+    this.router.navigate([], {
+      replaceUrl: true,
+      queryParams: { canvaConnected: null, canvaError: null },
+      queryParamsHandling: 'merge'
+    });
+
+    if (this.importModal?.kind !== 'integration') {
+      this.openImportIntegration('canva', false);
+    } else {
+      this.integrationProvider = 'canva';
     }
-    return !mime.startsWith('image/') && !mime.startsWith('video/');
+    this.refreshIntegrationStatus('canva', false);
   }
 
-  private mapDriveFile(it: IntegrationFileItemDto): DriveFileUiItem {
-    const anyIt = it as unknown as Record<string, unknown>;
-    const fileId =
-      (typeof anyIt['fileId'] === 'string' ? anyIt['fileId'] : undefined) ??
-      (typeof anyIt['id'] === 'string' ? anyIt['id'] : '');
-    return {
-      fileId,
-      name: typeof anyIt['name'] === 'string' ? anyIt['name'] : 'Sin nombre',
-      mimeType: typeof anyIt['mimeType'] === 'string' ? anyIt['mimeType'] : undefined,
-      thumbnailUrl: typeof anyIt['thumbnailUrl'] === 'string' ? anyIt['thumbnailUrl'] : undefined,
-      modifiedTime: typeof anyIt['modifiedTime'] === 'string' ? anyIt['modifiedTime'] : undefined,
-      sizeBytes: typeof anyIt['sizeBytes'] === 'number' ? anyIt['sizeBytes'] : undefined
-    };
+  private tryProcessOneDriveOAuthQuery(params: ParamMap): void {
+    const oneDriveConnected = params.get('oneDriveConnected');
+    if (oneDriveConnected === null) return;
+
+    const success = oneDriveConnected === '1';
+    const errorCode = params.get('oneDriveError')?.trim();
+    this.showToast(
+      success
+        ? 'OneDrive conectado correctamente.'
+        : errorCode
+          ? `No se pudo conectar OneDrive (${errorCode}).`
+          : 'No se pudo conectar OneDrive.',
+      success ? 'success' : 'error'
+    );
+
+    this.router.navigate([], {
+      replaceUrl: true,
+      queryParams: { oneDriveConnected: null, oneDriveError: null },
+      queryParamsHandling: 'merge'
+    });
+
+    if (this.importModal?.kind !== 'integration') {
+      this.openImportIntegration('onedrive', false);
+    } else {
+      this.integrationProvider = 'onedrive';
+    }
+    this.refreshIntegrationStatus('onedrive', false);
+  }
+
+  private revokeItemThumbnailObjectUrl(item: SelectedDriveFileItem): void {
+    if (!item.thumbnailObjectUrl) return;
+    const objectUrl = item.thumbnailObjectUrl;
+    URL.revokeObjectURL(objectUrl);
+    item.thumbnailObjectUrl = undefined;
+    if (item.thumbnailUrl === objectUrl) {
+      item.thumbnailUrl = undefined;
+    }
+  }
+
+  private revokeAllThumbnailObjectUrls(): void {
+    for (const file of this.selectedDriveFiles) {
+      this.revokeItemThumbnailObjectUrl(file);
+    }
+  }
+
+  onDrivePreviewImageError(file?: SelectedDriveFileItem): void {
+    const target = file ?? this.selectedDriveFiles[0];
+    if (!target) return;
+    const failedUrl = target.thumbnailUrl?.trim();
+    const iconUrl = target.iconUrl?.trim();
+    if (iconUrl && failedUrl !== iconUrl) {
+      target.thumbnailUrl = iconUrl;
+      this.selectedDriveFiles = [...this.selectedDriveFiles];
+      this.cdr.markForCheck();
+      return;
+    }
+    this.revokeItemThumbnailObjectUrl(target);
+    target.thumbnailUrl = undefined;
+    this.selectedDriveFiles = [...this.selectedDriveFiles];
+    this.cdr.markForCheck();
+  }
+
+  selectedDriveFileCount(): number {
+    return this.selectedDriveFiles.length;
+  }
+
+  primarySelectedDriveFile(): SelectedDriveFileItem | null {
+    return this.selectedDriveFiles[0] ?? null;
   }
 
   usedPercent(): number {
@@ -2267,6 +2942,303 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
     return this.formatBytes(asset.sizeBytes);
   }
 
+  resetCanvaImportState(): void {
+    this.canvaDesigns = [];
+    this.canvaContinuation = null;
+    this.canvaDesignsLoading = false;
+    this.canvaDesignsLoadingMore = false;
+    this.canvaDesignQuery = '';
+    this.canvaSortBy = 'modified_desc';
+    this.canvaOwnership = 'any';
+    this.selectedCanvaDesign = null;
+    this.canvaExportFormats = [];
+    this.selectedCanvaFormat = null;
+    this.canvaImportPhase = 'idle';
+  }
+
+  onCanvaSearchInput(): void {
+    this.canvaSearchInput$.next(this.canvaDesignQuery.trim());
+  }
+
+  onCanvaFiltersChange(): void {
+    if (this.oauthUiState === 'connected' && this.integrationProvider === 'canva') {
+      this.loadCanvaDesigns();
+    }
+  }
+
+  loadCanvaDesigns(append = false): void {
+    if (this.integrationProvider !== 'canva' || this.oauthUiState !== 'connected') {
+      return;
+    }
+    if (append) {
+      if (this.canvaDesignsLoading || this.canvaDesignsLoadingMore || !this.canvaContinuation) {
+        return;
+      }
+      this.canvaDesignsLoadingMore = true;
+    } else {
+      this.canvaDesignsLoading = true;
+      this.canvaImportPhase = 'loading_designs';
+    }
+
+    const sub = this.canvaIntegration
+      .listDesigns({
+        query: this.canvaDesignQuery.trim() || undefined,
+        pageSize: 20,
+        ownership: this.canvaOwnership,
+        sortBy: this.canvaSortBy,
+        continuation: append ? this.canvaContinuation ?? undefined : undefined
+      })
+      .subscribe({
+        next: (res) => {
+          const data = res.data;
+          const items = Array.isArray(data?.items) ? data.items : [];
+          this.canvaContinuation = data?.continuation?.trim() || null;
+
+          if (append) {
+            const seen = new Set(this.canvaDesigns.map((d) => d.designId));
+            const extra = items.filter((d) => !seen.has(d.designId));
+            this.canvaDesigns = [...this.canvaDesigns, ...extra];
+          } else {
+            this.canvaDesigns = items;
+          }
+
+          this.canvaDesignsLoading = false;
+          this.canvaDesignsLoadingMore = false;
+          this.canvaImportPhase =
+            this.canvaDesigns.length === 0 && !this.canvaDesignQuery.trim()
+              ? 'empty'
+              : this.canvaDesigns.length === 0
+                ? 'idle'
+                : 'idle';
+        },
+        error: (err) => {
+          this.canvaDesignsLoading = false;
+          this.canvaDesignsLoadingMore = false;
+          this.canvaImportPhase = 'idle';
+          if (!append) {
+            this.canvaDesigns = [];
+          }
+          this.showToast(this.mapCanvaError(err), 'error');
+          if (this.getHttpStatus(err) === 412) {
+            this.oauthUiState = 'disconnected';
+            this.oauthUiMessage = 'Integración no conectada. Vuelve a conectar Canva.';
+          }
+        }
+      });
+    this.subscriptions.add(sub);
+  }
+
+  loadMoreCanvaDesigns(): void {
+    this.loadCanvaDesigns(true);
+  }
+
+  isCanvaDesignSelected(design: CanvaDesignDto): boolean {
+    return this.selectedCanvaDesign?.designId === design.designId;
+  }
+
+  selectCanvaDesign(design: CanvaDesignDto): void {
+    if (
+      this.canvaImportPhase === 'exporting' ||
+      this.canvaImportPhase === 'waiting_export' ||
+      this.canvaImportPhase === 'importing'
+    ) {
+      return;
+    }
+    if (this.selectedCanvaDesign?.designId === design.designId) {
+      return;
+    }
+    this.selectedCanvaDesign = design;
+    this.canvaExportFormats = [];
+    this.selectedCanvaFormat = null;
+    this.integrationImportName = design.title?.trim() || '';
+    this.canvaImportPhase = 'loading_formats';
+
+    const sub = this.canvaIntegration.getExportFormats(design.designId).subscribe({
+      next: (res) => {
+        const formats = parseEnabledCanvaFormats(res.data?.formats);
+        this.canvaExportFormats = formats;
+        this.selectedCanvaFormat = formats[0] ?? null;
+        this.canvaImportPhase = 'idle';
+        if (!formats.length) {
+          this.showToast('Este diseño no tiene formatos de exportación disponibles.', 'warn');
+        }
+      },
+      error: (err) => {
+        this.canvaImportPhase = 'idle';
+        this.selectedCanvaDesign = null;
+        this.showToast(this.mapCanvaError(err), 'error');
+      }
+    });
+    this.subscriptions.add(sub);
+  }
+
+  selectCanvaFormat(format: CanvaExportFormat): void {
+    if (this.canvaExportFormats.includes(format)) {
+      this.selectedCanvaFormat = format;
+    }
+  }
+
+  canvaFormatLabel(format: CanvaExportFormat): string {
+    switch (format) {
+      case 'png':
+        return 'PNG';
+      case 'jpg':
+        return 'JPG';
+      case 'mp4':
+        return 'MP4 (video)';
+      default:
+        return format;
+    }
+  }
+
+  canvaImportBusy(): boolean {
+    return (
+      this.canvaImportPhase === 'exporting' ||
+      this.canvaImportPhase === 'waiting_export' ||
+      this.canvaImportPhase === 'importing'
+    );
+  }
+
+  canvaImportProgressLabel(): string {
+    switch (this.canvaImportPhase) {
+      case 'exporting':
+        return 'Iniciando exportación…';
+      case 'waiting_export':
+        return 'Exportando diseño…';
+      case 'importing':
+        return 'Importando a la biblioteca…';
+      default:
+        return '';
+    }
+  }
+
+  importSelectedCanvaDesign(): void {
+    const design = this.selectedCanvaDesign;
+    const format = this.selectedCanvaFormat;
+    if (!design || !format || this.canvaImportBusy()) {
+      return;
+    }
+
+    const exportBody =
+      format === 'mp4'
+        ? { format }
+        : { format, pages: [1], quality: 100 };
+
+    this.canvaImportPhase = 'exporting';
+    const sub = this.canvaIntegration.startExport(design.designId, exportBody).subscribe({
+      next: (startRes) => {
+        const exportJobId = startRes.data?.exportJobId?.trim();
+        if (!exportJobId) {
+          this.canvaImportPhase = 'idle';
+          this.showToast('El backend no devolvió exportJobId.', 'error');
+          return;
+        }
+        this.canvaImportPhase = 'waiting_export';
+        const pollSub = this.canvaIntegration.pollExportUntilReady(exportJobId).subscribe({
+          next: () => {
+            this.canvaImportPhase = 'importing';
+            const tags = this.buildCanvaImportTags();
+            const name = this.buildCanvaImportName(design, format);
+            const importSub = this.canvaIntegration
+              .importExport(exportJobId, {
+                name,
+                tags,
+                sourceDesignId: design.designId
+              })
+              .subscribe({
+                next: () => {
+                  this.canvaImportPhase = 'idle';
+                  this.showToast('Diseño importado correctamente.', 'success');
+                  this.closeImportModal();
+                  this.loadAssets();
+                  this.loadStorageSummary();
+                },
+                error: (err) => {
+                  this.canvaImportPhase = 'idle';
+                  this.showToast(this.mapCanvaError(err), 'error');
+                  if (this.getHttpStatus(err) === 412) {
+                    this.oauthUiState = 'disconnected';
+                    this.oauthUiMessage = 'Integración no conectada. Vuelve a conectar Canva.';
+                  }
+                }
+              });
+            this.subscriptions.add(importSub);
+          },
+          error: (err) => {
+            this.canvaImportPhase = 'idle';
+            this.showToast(this.mapCanvaError(err), 'error');
+          }
+        });
+        this.subscriptions.add(pollSub);
+      },
+      error: (err) => {
+        this.canvaImportPhase = 'idle';
+        this.showToast(this.mapCanvaError(err), 'error');
+        if (this.getHttpStatus(err) === 412) {
+          this.oauthUiState = 'disconnected';
+          this.oauthUiMessage = 'Integración no conectada. Vuelve a conectar Canva.';
+        }
+      }
+    });
+    this.subscriptions.add(sub);
+  }
+
+  formatCanvaDesignDate(iso?: string): string {
+    if (!iso?.trim()) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  private buildCanvaImportTags(): string[] {
+    const userTags = this.integrationImportTags
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const merged = new Set(['canva', ...userTags]);
+    return Array.from(merged);
+  }
+
+  private buildCanvaImportName(design: CanvaDesignDto, format: CanvaExportFormat): string {
+    const custom = this.integrationImportName.trim();
+    if (custom) {
+      return custom;
+    }
+    const base = (design.title || 'diseno-canva')
+      .trim()
+      .toLowerCase()
+      .replace(/[^\w\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .slice(0, 80);
+    const ext = format === 'mp4' ? 'mp4' : format;
+    return `${base || 'diseno-canva'}.${ext}`;
+  }
+
+  private mapCanvaError(err: unknown): string {
+    const http = err as HttpErrorResponse;
+    const code = String((http?.error as { code?: string } | null)?.code ?? '').toUpperCase();
+    const canvaMessages: Record<string, string> = {
+      INTEGRATION_NOT_CONNECTED: 'Integración no conectada. Conecta Canva para continuar.',
+      CANVA_AUTH_FAILED: 'No se pudo conectar Canva.',
+      CANVA_DESIGN_NOT_FOUND: 'El diseño ya no existe en Canva.',
+      CANVA_EXPORT_NOT_READY: 'La exportación aún no está lista. Intenta de nuevo.',
+      CANVA_EXPORT_EXPIRED: 'La exportación expiró. Vuelve a exportar el diseño.',
+      CANVA_EXPORT_MULTIPLE_FILES_NOT_SUPPORTED: 'Solo se admite una página por exportación.',
+      CANVA_CONNECTION_REVOKED: 'La conexión con Canva fue revocada. Vuelve a conectar.',
+      CANVA_EXPORT_TIMEOUT: 'La exportación tardó más de lo esperado.',
+      CANVA_EXPORT_FAILED: 'La exportación del diseño falló.',
+      LICENSE_REQUIRED: 'Canva requiere una licencia para exportar este diseño.',
+      APPROVAL_REQUIRED: 'Este diseño necesita aprobación en Canva antes de exportarse.',
+      INTERNAL_FAILURE: 'Canva no pudo completar la exportación. Intenta de nuevo.',
+      MEDIA_QUOTA_EXCEEDED: 'No hay espacio disponible en tu cuota de almacenamiento.',
+      MEDIA_TOO_LARGE: 'El archivo supera el tamaño máximo permitido.',
+      MEDIA_INVALID_TYPE: 'Tipo de archivo no permitido para la biblioteca.'
+    };
+    if (canvaMessages[code]) return canvaMessages[code];
+    return extractErrorMessage(http, 'No se pudo completar la operación con Canva.');
+  }
+
   integrationTitle(provider: Provider): string {
     switch (provider) {
       case 'google-drive':
@@ -2277,6 +3249,66 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
         return 'Canva';
       default:
         return provider;
+    }
+  }
+
+  integrationProviderLabel(): string {
+    return this.integrationTitle(this.integrationProvider);
+  }
+
+  integrationModalHelp(): string {
+    switch (this.integrationProvider) {
+      case 'onedrive':
+        return 'Selecciona un archivo desde tu cuenta de OneDrive e impórtalo a tu biblioteca.';
+      case 'canva':
+        return 'Selecciona un diseño desde Canva e impórtalo a tu biblioteca.';
+      default:
+        return 'Selecciona un archivo desde tu cuenta de Google e impórtalo a tu biblioteca.';
+    }
+  }
+
+  integrationConnectedTitle(): string {
+    return `${this.integrationProviderLabel()} conectado`;
+  }
+
+  integrationFileBadge(): string {
+    switch (this.integrationProvider) {
+      case 'onedrive':
+        return 'OD';
+      case 'canva':
+        return 'CV';
+      default:
+        return 'GD';
+    }
+  }
+
+  integrationFileTypeHint(): string {
+    switch (this.integrationProvider) {
+      case 'onedrive':
+        return 'Archivo de OneDrive';
+      case 'canva':
+        return 'Archivo de Canva';
+      default:
+        return 'Archivo de Google Drive';
+    }
+  }
+
+  integrationPickerButtonLabel(): string {
+    if (this.pickerLoading) return 'Abriendo selector…';
+    switch (this.integrationProvider) {
+      case 'onedrive':
+        return 'Seleccionar archivos en OneDrive';
+      default:
+        return 'Seleccionar archivos en Google Drive';
+    }
+  }
+
+  integrationPickerNote(): string {
+    switch (this.integrationProvider) {
+      case 'onedrive':
+        return 'Se abrirá el selector oficial de Microsoft. Puedes elegir varios archivos (máx. 50).';
+      default:
+        return 'Se abrirá el selector oficial de Google. Puedes elegir varios archivos (máx. 50).';
     }
   }
 
@@ -2300,17 +3332,55 @@ export class GestorArchivosComponent implements OnInit, OnDestroy {
   connectAccountButtonLabel(): string {
     if (this.oauthUiState === 'connecting') return 'Conectando...';
     if (this.oauthUiState === 'verifying_callback') return 'Comprobando...';
-    if (this.oauthUiState === 'error') return 'Volver a conectar con Google';
-    return 'Conectar con Google';
+    if (this.oauthUiState === 'error') return `Volver a conectar con ${this.integrationProviderLabel()}`;
+    return `Conectar con ${this.integrationProviderLabel()}`;
   }
 
   integrationImportFooterHint(): string {
+    if (this.integrationProvider === 'canva') {
+      if (this.oauthUiState !== 'connected') {
+        return `Aún no hay conexión activa con ${this.integrationProviderLabel()}.`;
+      }
+      if (this.canvaImportPhase === 'exporting' || this.canvaImportPhase === 'waiting_export') {
+        return 'Exportando diseño…';
+      }
+      if (this.canvaImportPhase === 'importing') {
+        return 'Importando a la biblioteca…';
+      }
+      if (!this.selectedCanvaDesign) {
+        return 'Selecciona un diseño de la grilla.';
+      }
+      if (!this.selectedCanvaFormat) {
+        return 'Elige un formato de exportación.';
+      }
+      return 'Diseño listo para importar.';
+    }
     if (this.oauthUiState !== 'connected') {
-      return 'Aún no hay conexión activa con Google Drive.';
+      return `Aún no hay conexión activa con ${this.integrationProviderLabel()}.`;
     }
-    if (!this.integrationFileId.trim()) {
-      return 'Aún no has seleccionado un archivo.';
+    const count = this.selectedDriveFiles.length;
+    if (!count) {
+      return 'Aún no has seleccionado archivos.';
     }
-    return '1 archivo listo para importar';
+    if (count === 1) {
+      return '1 archivo listo para importar';
+    }
+    return `${count} archivos listos para importar`;
+  }
+
+  integrationImportButtonLabel(): string {
+    if (this.integrationProvider === 'canva') {
+      if (this.canvaImportPhase === 'exporting' || this.canvaImportPhase === 'waiting_export') {
+        return 'Exportando…';
+      }
+      if (this.canvaImportPhase === 'importing') {
+        return 'Importando…';
+      }
+      return 'Importar diseño a la biblioteca';
+    }
+    if (this.importingExternal) return 'Importando…';
+    const count = this.selectedDriveFiles.length;
+    if (count > 1) return `Importar ${count} archivos a la biblioteca`;
+    return 'Importar a la biblioteca';
   }
 }

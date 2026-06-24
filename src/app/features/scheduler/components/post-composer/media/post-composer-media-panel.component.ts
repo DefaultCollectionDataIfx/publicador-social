@@ -168,7 +168,12 @@ export class PostComposerMediaPanelComponent implements OnChanges, OnDestroy {
     const sub = this.composerMedia.uploadMedia(this.selectedDeviceFile).subscribe({
       next: (res) => {
         this.deviceUploading = false;
-        const d = res.data;
+        const item = res.data.results?.[0];
+        if (!item?.ok || !item.data) {
+          this.deviceError = item?.message?.trim() || 'No se pudo subir el archivo.';
+          return;
+        }
+        const d = item.data;
         this.emitApplyAndClose({
           mediaId: d.mediaId,
           imageUrl: d.publicUrl?.trim() || undefined

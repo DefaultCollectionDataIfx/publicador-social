@@ -172,8 +172,16 @@ export class DashboardOverviewComponent implements OnInit, OnDestroy {
       groups: groupsObservable
     }).subscribe({
       next: ({ pages, syncLogs, groups }) => {
-        this.pages = pages.map(page => ({ ...page, loadingSnapshot: true }));
-        this.groups = groups.data.map(group => ({ ...group, loadingSnapshot: true }));
+        this.pages = pages.map(page => ({
+          ...page,
+          name: page.name?.trim() || 'Página sin nombre',
+          loadingSnapshot: true
+        }));
+        this.groups = groups.data.map(group => ({
+          ...group,
+          name: group.name?.trim() || 'Grupo sin nombre',
+          loadingSnapshot: true
+        }));
         this.lastSyncLog = syncLogs.data.length > 0 ? syncLogs.data[0] : null;
 
         // Cargar snapshots para cada página y grupo activo
@@ -377,5 +385,13 @@ export class DashboardOverviewComponent implements OnInit, OnDestroy {
     if (trend === 'up') return 'trend-up';
     if (trend === 'down') return 'trend-down';
     return 'trend-neutral';
+  }
+
+  getAccountInitial(name?: string | null): string {
+    const trimmed = name?.trim();
+    if (!trimmed) {
+      return '?';
+    }
+    return trimmed.charAt(0).toUpperCase();
   }
 }

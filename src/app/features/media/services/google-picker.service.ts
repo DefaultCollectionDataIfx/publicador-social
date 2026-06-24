@@ -11,12 +11,14 @@ declare global {
     google?: {
       picker?: {
         Action: { PICKED: string; CANCEL: string };
+        Feature: { MULTISELECT_ENABLED: string };
         DocsView: new () => { setIncludeFolders: (v: boolean) => unknown; setSelectFolderEnabled: (v: boolean) => unknown };
         PickerBuilder: new () => {
           setDeveloperKey: (key: string) => unknown;
           setOAuthToken: (token: string) => unknown;
           setAppId: (appId: string) => unknown;
           addView: (view: unknown) => unknown;
+          enableFeature: (feature: string) => unknown;
           setCallback: (cb: (data: unknown) => void) => unknown;
           build: () => { setVisible: (visible: boolean) => void };
         };
@@ -30,6 +32,8 @@ export interface PickedGoogleFile {
   name?: string;
   mimeType?: string;
 }
+
+const MAX_PICKER_FILES = 50;
 
 @Injectable({ providedIn: 'root' })
 export class GooglePickerService {
@@ -47,10 +51,10 @@ export class GooglePickerService {
     apiKey: string;
     oauthToken: string;
     appId?: string;
-  }): Promise<PickedGoogleFile | null> {
+  }): Promise<PickedGoogleFile[] | null> {
     return this.ensureReady().then(
       () =>
-        new Promise<PickedGoogleFile | null>((resolve) => {
+        new Promise<PickedGoogleFile[] | null>((resolve) => {
           const pickerNs = window.google?.picker;
           if (!pickerNs) {
             resolve(null);
@@ -63,20 +67,19 @@ export class GooglePickerService {
             .setDeveloperKey(params.apiKey)
             .setOAuthToken(params.oauthToken)
             .addView(view)
+            .enableFeature(pickerNs.Feature.MULTISELECT_ENABLED)
             .setCallback((data: any) => {
               const action = data?.action;
               const docs = Array.isArray(data?.docs) ? data.docs : [];
               if (action === pickerNs.Action.PICKED || docs.length > 0) {
-                const doc = docs[0];
-                resolve(
-                  doc
-                    ? {
-                        fileId: String(doc.id ?? ''),
-                        name: typeof doc.name === 'string' ? doc.name : undefined,
-                        mimeType: typeof doc.mimeType === 'string' ? doc.mimeType : undefined
-                      }
-                    : null
-                );
+                const files = docs
+                  .map((doc: any) => ({
+                    fileId: String(doc?.id ?? '').trim(),
+                    name: typeof doc?.name === 'string' ? doc.name : undefined,
+                    mimeType: typeof doc?.mimeType === 'string' ? doc.mimeType : undefined
+                  }))
+                  .filter((file: PickedGoogleFile) => Boolean(file.fileId));
+                resolve(files.length ? files : null);
                 return;
               }
               if (data?.action === pickerNs.Action.CANCEL) {
@@ -90,6 +93,21 @@ export class GooglePickerService {
           picker.setVisible(true);
         })
     );
+  }
+
+  static dedupeAndCap(files: PickedGoogleFile[], max = MAX_PICKER_FILES): { files: PickedGoogleFile[]; truncated: boolean } {
+    const seen = new Set<string>();
+    const deduped: PickedGoogleFile[] = [];
+    for (const file of files) {
+      const fileId = file.fileId?.trim();
+      if (!fileId || seen.has(fileId)) continue;
+      seen.add(fileId);
+      deduped.push({ ...file, fileId });
+    }
+    if (deduped.length <= max) {
+      return { files: deduped, truncated: false };
+    }
+    return { files: deduped.slice(0, max), truncated: true };
   }
 
   private loadScript(): Promise<void> {
@@ -136,4 +154,3 @@ export class GooglePickerService {
     return this.pickerModuleReadyPromise;
   }
 }
-

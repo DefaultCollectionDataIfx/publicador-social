@@ -377,7 +377,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
         // Si el avatar cambió, refrescar
         if (currentAvatarUrl !== cachedAvatarUrl) {
-          console.log('Avatar detectado como cambiado, refrescando...', { currentAvatarUrl, cachedAvatarUrl });
           this.refreshUserData();
         }
       } else if (currentUser && !this.user) {
@@ -472,7 +471,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
         const profileSub = this.authService.getProfile().subscribe({
           next: (profileResponse) => {
             this.authService.updateUserData(profileResponse.data);
-            this.refreshUserData();
+            this.refreshUserData(true);
           },
           error: () => {
             /* continuar con datos básicos del alta */
@@ -709,38 +708,34 @@ export class DashboardComponent implements OnInit, OnDestroy {
       if (forceRefresh || baseUrl !== cachedBaseUrl || !this.avatarUrlWithCache) {
         const separator = avatarUrl.includes('?') ? '&' : '?';
         this.avatarUrlWithCache = `${avatarUrl}${separator}t=${Date.now()}`;
-        console.log('Avatar URL actualizado:', this.avatarUrlWithCache);
       }
       // Si ya hay cache y la URL base es la misma, mantenerlo (evita ExpressionChangedAfterItHasBeenCheckedError)
     } else {
       this.avatarUrlWithCache = null;
-      console.log('No hay avatarUrl válido');
     }
   }
 
   /**
-   * Recarga los datos del usuario desde localStorage o servidor
-   * Útil cuando se actualiza el perfil desde otra página
+   * Recarga los datos del usuario desde localStorage o servidor.
+   * @param forceAvatarRefresh Forzar nuevo cache buster aunque la URL base no haya cambiado
    */
-  refreshUserData(): void {
+  refreshUserData(forceAvatarRefresh = false): void {
     const currentUser = this.authService.getUser();
-    if (currentUser) {
-      const oldAvatarUrl = this.user ? validateAvatarUrl((this.user as UserProfileData).avatarUrl) : null;
-      this.user = currentUser;
+    if (!currentUser) {
+      return;
+    }
 
-      const newAvatarUrl = validateAvatarUrl((currentUser as UserProfileData).avatarUrl);
+    const oldAvatarUrl = this.user ? validateAvatarUrl((this.user as UserProfileData).avatarUrl) : null;
+    const newAvatarUrl = validateAvatarUrl((currentUser as UserProfileData).avatarUrl);
 
-      // Si la URL cambió, actualizar
-      if (oldAvatarUrl !== newAvatarUrl) {
-        this.updateAvatarUrl(true); // Forzar refresh con nuevo timestamp
-      } else if (oldAvatarUrl === newAvatarUrl && newAvatarUrl) {
-        // Si la URL es la misma pero existe, forzar refresh para recargar la imagen
-        // (útil cuando se sube una nueva imagen con el mismo nombre)
-        this.updateAvatarUrl(true); // Forzar refresh
-      } else if (!newAvatarUrl) {
-        // Si no hay URL, limpiar cache
-        this.avatarUrlWithCache = null;
-      }
+    this.user = currentUser;
+
+    if (!newAvatarUrl) {
+      this.avatarUrlWithCache = null;
+    } else if (forceAvatarRefresh || oldAvatarUrl !== newAvatarUrl) {
+      this.updateAvatarUrl(true);
+    } else if (!this.avatarUrlWithCache) {
+      this.updateAvatarUrl();
     }
   }
 

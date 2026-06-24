@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
+import { HttpClient, HttpEvent, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Observable, throwError } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 
@@ -18,7 +18,7 @@ export interface ApiResponse<T> {
   };
 }
 
-/** Contrato maduro para POST /api/media/upload. */
+/** Ítem de media en respuesta de upload/import. */
 export interface MediaUploadResponseBody {
   mediaId: number;
   publicUrl: string;
@@ -30,6 +30,22 @@ export interface MediaUploadResponseBody {
   mimeType: string;
   width?: number | null;
   height?: number | null;
+}
+
+export interface MediaUploadBatchResultItemDto {
+  fileName: string;
+  ok: boolean;
+  data?: MediaUploadResponseBody;
+  status?: number;
+  code?: string;
+  message?: string;
+}
+
+export interface MediaUploadBatchResultDto {
+  totalRequested: number;
+  processed: number;
+  failed: number;
+  results: MediaUploadBatchResultItemDto[];
 }
 
 /** Ítem de biblioteca (GET /api/media) — alineado con `MediaListItemDto` del API. */
@@ -188,8 +204,36 @@ export interface IntegrationOAuthStartResponseDto {
 
 export interface ExternalImportRequestDto {
   fileId: string;
+  driveId?: string;
   name?: string;
   tags?: string[];
+}
+
+export interface ExternalImportBatchFileDto {
+  fileId: string;
+  driveId?: string;
+  name?: string;
+}
+
+export interface ExternalImportBatchRequestDto {
+  files: ExternalImportBatchFileDto[];
+  tags?: string[];
+}
+
+export interface ExternalImportBatchResultItemDto {
+  fileId: string;
+  ok: boolean;
+  data?: MediaUploadResponseBody;
+  status?: number;
+  code?: string;
+  message?: string;
+}
+
+export interface ExternalImportBatchResultDto {
+  totalRequested: number;
+  processed: number;
+  failed: number;
+  results: ExternalImportBatchResultItemDto[];
 }
 
 export interface IntegrationStatusResponseDto {
@@ -197,27 +241,56 @@ export interface IntegrationStatusResponseDto {
   connected: boolean;
   connectedAt?: string | null;
   accountEmail?: string | null;
-}
-
-export interface IntegrationFileItemDto {
-  fileId: string;
-  name: string;
-  mimeType?: string;
-  thumbnailUrl?: string;
-  modifiedTime?: string;
-  sizeBytes?: number;
-}
-
-export interface IntegrationFilesQuery {
-  q?: string;
-  page?: number;
-  pageSize?: number;
+  /** URL base SharePoint/OneDrive para File Picker v8 (p. ej. https://contoso-my.sharepoint.com). */
+  pickerBaseUrl?: string | null;
+  sharePointBaseUrl?: string | null;
 }
 
 export interface IntegrationPickerTokenDto {
   oauthToken: string;
   apiKey?: string;
   appId?: string;
+  provider?: string;
+  resource?: string;
+  /** URL del picker cuando difiere de `resource` (p. ej. token Graph pero picker en SharePoint). */
+  pickerBaseUrl?: string;
+}
+
+export interface IntegrationFilePreviewDto {
+  fileId: string;
+  driveId?: string;
+  name?: string;
+  mimeType?: string;
+  thumbnailUrl?: string | null;
+  iconUrl?: string | null;
+  sizeBytes?: number | null;
+  modifiedTime?: string | null;
+}
+
+export interface IntegrationFilePreviewBatchFileDto {
+  fileId: string;
+  driveId?: string;
+}
+
+export interface IntegrationFilePreviewBatchRequestDto {
+  files: IntegrationFilePreviewBatchFileDto[];
+}
+
+export interface IntegrationFilePreviewBatchResultItemDto {
+  fileId: string;
+  driveId?: string;
+  ok: boolean;
+  data?: IntegrationFilePreviewDto;
+  status?: number;
+  code?: string;
+  message?: string;
+}
+
+export interface IntegrationFilePreviewBatchResultDto {
+  totalRequested: number;
+  processed: number;
+  failed: number;
+  results: IntegrationFilePreviewBatchResultItemDto[];
 }
 
 /** POST /api/media/{mediaId}/edit-image — recorte normalizado sobre imagen orientada (EXIF). */
@@ -260,14 +333,29 @@ export class ComposerMediaService {
 
   constructor(private http: HttpClient) {}
 
-  uploadMedia(file: File): Observable<ApiResponse<MediaUploadResponseBody>> {
+  uploadMedia(files: File | File[]): Observable<ApiResponse<MediaUploadBatchResultDto>> {
+    const list = Array.isArray(files) ? files : [files];
     const formData = new FormData();
-    formData.append('file', file, file.name);
-    return this.http.post<ApiResponse<MediaUploadResponseBody>>(`${this.base}/upload`, formData).pipe(
+    for (const file of list) {
+      formData.append('files', file, file.name);
+    }
+    return this.http.post<ApiResponse<MediaUploadBatchResultDto>>(`${this.base}/upload`, formData).pipe(
       catchError((err) =>
         throwError(() => err)
       )
     );
+  }
+
+  uploadMediaWithProgress(files: File | File[]): Observable<HttpEvent<ApiResponse<MediaUploadBatchResultDto>>> {
+    const list = Array.isArray(files) ? files : [files];
+    const formData = new FormData();
+    for (const file of list) {
+      formData.append('files', file, file.name);
+    }
+    return this.http.post<ApiResponse<MediaUploadBatchResultDto>>(`${this.base}/upload`, formData, {
+      reportProgress: true,
+      observe: 'events'
+    });
   }
 
   listMedia(query: MediaLibraryListQuery = {}): Observable<ApiResponse<MediaLibraryItemDto[]>> {
@@ -434,6 +522,18 @@ export class ComposerMediaService {
       .pipe(catchError((err) => throwError(() => err)));
   }
 
+  importFromProviderBatch(
+    provider: string,
+    body: ExternalImportBatchRequestDto
+  ): Observable<ApiResponse<ExternalImportBatchResultDto>> {
+    return this.http
+      .post<ApiResponse<ExternalImportBatchResultDto>>(
+        `/api/integrations/${encodeURIComponent(provider)}/import/batch`,
+        body
+      )
+      .pipe(catchError((err) => throwError(() => err)));
+  }
+
   getIntegrationStatus(provider: string): Observable<ApiResponse<IntegrationStatusResponseDto>> {
     return this.http
       .get<ApiResponse<IntegrationStatusResponseDto>>(`/api/integrations/${encodeURIComponent(provider)}/status`)
@@ -446,24 +546,46 @@ export class ComposerMediaService {
       .pipe(catchError((err) => throwError(() => err)));
   }
 
-  listIntegrationFiles(
+  getIntegrationPickerToken(
     provider: string,
-    query: IntegrationFilesQuery = {}
-  ): Observable<ApiResponse<IntegrationFileItemDto[]>> {
-    let params = new HttpParams()
-      .set('page', String(query.page ?? 1))
-      .set('pageSize', String(query.pageSize ?? 24));
-    if (query.q?.trim()) {
-      params = params.set('q', query.q.trim());
+    resource?: string
+  ): Observable<ApiResponse<IntegrationPickerTokenDto>> {
+    let params = new HttpParams();
+    const resourceValue = resource?.trim();
+    if (resourceValue) {
+      params = params.set('resource', resourceValue);
     }
     return this.http
-      .get<ApiResponse<IntegrationFileItemDto[]>>(`/api/integrations/${encodeURIComponent(provider)}/files`, { params })
+      .get<ApiResponse<IntegrationPickerTokenDto>>(
+        `/api/integrations/${encodeURIComponent(provider)}/picker-token`,
+        { params }
+      )
       .pipe(catchError((err) => throwError(() => err)));
   }
 
-  getIntegrationPickerToken(provider: string): Observable<ApiResponse<IntegrationPickerTokenDto>> {
+  getIntegrationFilePreviewBatch(
+    provider: string,
+    body: IntegrationFilePreviewBatchRequestDto
+  ): Observable<ApiResponse<IntegrationFilePreviewBatchResultDto>> {
     return this.http
-      .get<ApiResponse<IntegrationPickerTokenDto>>(`/api/integrations/${encodeURIComponent(provider)}/picker-token`)
+      .post<ApiResponse<IntegrationFilePreviewBatchResultDto>>(
+        `/api/integrations/${encodeURIComponent(provider)}/files/preview/batch`,
+        body
+      )
+      .pipe(catchError((err) => throwError(() => err)));
+  }
+
+  getIntegrationFileThumbnail(provider: string, fileId: string, driveId?: string): Observable<Blob> {
+    let params = new HttpParams();
+    const driveIdValue = driveId?.trim();
+    if (driveIdValue) {
+      params = params.set('driveId', driveIdValue);
+    }
+    return this.http
+      .get(
+        `/api/integrations/${encodeURIComponent(provider)}/files/${encodeURIComponent(fileId)}/thumbnail`,
+        { params, responseType: 'blob' }
+      )
       .pipe(catchError((err) => throwError(() => err)));
   }
 }
