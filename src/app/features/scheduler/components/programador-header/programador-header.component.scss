@@ -91,6 +91,17 @@
   gap: 12px;
   flex-shrink: 0;
 
+  .ig-quota-badge {
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: #fdf2f8;
+    border: 1px solid #fbcfe8;
+    color: #9d174d;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
   .new-post-btn {
     display: flex;
     align-items: center;

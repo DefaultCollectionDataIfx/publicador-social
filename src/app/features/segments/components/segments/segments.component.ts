@@ -2,9 +2,11 @@ import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule, ReactiveFormsModule, FormBuilder, FormGroup, Validators } from '@angular/forms';
 import { Subscription, forkJoin, of } from 'rxjs';
-import { catchError } from 'rxjs/operators';
+import { catchError, map } from 'rxjs/operators';
 import { SegmentsService } from '../../services/segments.service';
 import { FacebookOAuthService } from '../../../../core/services/facebook-oauth.service';
+import { SocialService } from '../../../../core/services/social.service';
+import { SocialAccount } from '../../../social/models/social.model';
 import { TenantEntitlementsResponse } from '../../../../core/models/tenant.model';
 import { TenantEntitlementsService } from '../../../../core/services/tenant-entitlements.service';
 import { canUseLimit, getLimitValue, isFeatureEnabled } from '../../../../core/utils/entitlements.utils';
@@ -64,6 +66,7 @@ export class SegmentsComponent implements OnInit, OnDestroy {
   
   // Datos para agregar items
   availablePages: FacebookPage[] = [];
+  availablePageAccounts: SocialAccount[] = [];
   availableGroups: FacebookGroup[] = [];
   selectedPageIds: number[] = [];
   selectedGroupIds: number[] = [];
@@ -80,6 +83,7 @@ export class SegmentsComponent implements OnInit, OnDestroy {
   constructor(
     private segmentsService: SegmentsService,
     private facebookService: FacebookOAuthService,
+    private social: SocialService,
     private groupsService: FacebookGroupsService,
     private fb: FormBuilder,
     private tenantEntitlements: TenantEntitlementsService
@@ -276,20 +280,17 @@ export class SegmentsComponent implements OnInit, OnDestroy {
         // Si hay items seleccionados, agregarlos
         const totalSelected = this.selectedPageIds.length + this.selectedGroupIds.length;
         if (totalSelected > 0) {
-          const addItemsRequest: AddItemsToSegmentRequest = {};
-          
-          if (this.selectedPageIds.length > 0) {
-            addItemsRequest.pageIds = this.selectedPageIds;
-          }
-          
-          if (this.selectedGroupIds.length > 0) {
-            addItemsRequest.groupIds = this.selectedGroupIds;
+          const managedSocialAccountIds = [...this.selectedPageIds];
+          if (managedSocialAccountIds.length === 0 && this.selectedGroupIds.length > 0) {
+            this.creating = false;
+            this.createError =
+              'Los grupos de Facebook aún no están disponibles en la API social. Selecciona páginas.';
+            return;
           }
 
-          const addItemsSubscription = this.segmentsService.addItemsToSegment(
-            response.collectionId,
-            addItemsRequest
-          ).subscribe({
+          const addItemsSubscription = this.segmentsService
+            .addItemsToSegment(response.collectionId, { managedSocialAccountIds })
+            .subscribe({
             next: (addResponse) => {
               this.creating = false;
               this.closeCreateModal();
@@ -497,12 +498,24 @@ export class SegmentsComponent implements OnInit, OnDestroy {
     this.loadingAssets = true;
     
     // Usar forkJoin para esperar a que ambas peticiones terminen
-    const pages$ = this.facebookService.getConnectedPages().pipe(
-      catchError(error => {
-        console.error('Error al cargar páginas:', error);
-        return of([]); // Retornar array vacío en caso de error
-      })
-    );
+    const pages$ = this.social
+      .getAccounts({ providerGroup: 'meta', provider: 'facebook', accountType: 'page' })
+      .pipe(
+        map((accounts) => accounts.map((a) => this.social.accountToFacebookPage(a))),
+        catchError((error) => {
+          console.error('Error al cargar páginas:', error);
+          return of([]);
+        })
+      );
+
+    const pageAccounts$ = this.social
+      .getAccounts({ providerGroup: 'meta', provider: 'facebook', accountType: 'page' })
+      .pipe(
+        catchError((error) => {
+          console.error('Error al cargar cuentas:', error);
+          return of([]);
+        })
+      );
 
     const groups$ = this.groupsService.getGroups().pipe(
       catchError(error => {
@@ -513,11 +526,13 @@ export class SegmentsComponent implements OnInit, OnDestroy {
 
     const subscription = forkJoin({
       pages: pages$,
+      pageAccounts: pageAccounts$,
       groups: groups$
     }).subscribe({
-      next: ({ pages, groups }) => {
-        this.availablePages = pages.filter(p => p.isActive);
-        this.availableGroups = groups.data.filter(g => g.isActive);
+      next: ({ pages, pageAccounts, groups }) => {
+        this.availablePageAccounts = pageAccounts.filter((a) => a.isActive);
+        this.availablePages = pages.filter((p) => p.isActive);
+        this.availableGroups = groups.data.filter((g) => g.isActive);
         this.loadingAssets = false;
       },
       error: (error) => {
@@ -584,20 +599,18 @@ export class SegmentsComponent implements OnInit, OnDestroy {
     }
 
     this.addingItems = true;
-    const request: AddItemsToSegmentRequest = {};
-    
-    if (this.selectedPageIds.length > 0) {
-      request.pageIds = this.selectedPageIds;
-    }
-    
-    if (this.selectedGroupIds.length > 0) {
-      request.groupIds = this.selectedGroupIds;
+
+    if (this.selectedPageIds.length === 0) {
+      this.addingItems = false;
+      alert('Solo se pueden agregar páginas de Facebook vía cuentas sociales. Los grupos no están disponibles aún.');
+      return;
     }
 
-    const subscription = this.segmentsService.addItemsToSegment(
-      this.selectedSegment.collectionId,
-      request
-    ).subscribe({
+    const subscription = this.segmentsService
+      .addItemsToSegment(this.selectedSegment.collectionId, {
+        managedSocialAccountIds: this.selectedPageIds
+      })
+      .subscribe({
       next: (response) => {
         this.addingItems = false;
         this.closeAddItemsModal();
@@ -695,9 +708,10 @@ export class SegmentsComponent implements OnInit, OnDestroy {
    * incluya el ID numérico en la respuesta de GET /api/Facebook/pages.
    */
   getPageAssetId(page: FacebookPage): number {
-    // Intentar obtener el ID desde campos extendidos
-    // El backend debería incluir el ID numérico en la respuesta
-    return (page as any).id || (page as any).socialAssetId || (page as any).pageId || 0;
+    const account = this.availablePageAccounts.find(
+      (a) => a.externalAccountId === page.facebookPageId
+    );
+    return account?.id ?? 0;
   }
 
   /**

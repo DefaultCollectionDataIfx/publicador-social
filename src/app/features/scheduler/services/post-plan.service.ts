@@ -1,88 +1,73 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import { HttpErrorResponse } from '@angular/common/http';
 import { Observable, throwError } from 'rxjs';
 import { catchError } from 'rxjs/operators';
-import { CreatePostPlanRequest, CreatePostPlanResponse, PostPlanDetailsResponse, PostPlanListResponse } from '../models/post-plan.model';
-import { HttpParams } from '@angular/common/http';
+import {
+  CreatePostPlanRequest,
+  CreatePostPlanResponse,
+  PostPlanDetailsResponse,
+  PostPlanListResponse,
+  PublishAttempt
+} from '../models/post-plan.model';
+import { SocialService } from '../../../core/services/social.service';
+import { CreateSocialPostPlanRequest } from '../../social/models/social.model';
 
 @Injectable({
   providedIn: 'root'
 })
 export class PostPlanService {
-  private readonly apiUrl = '/api/PostPlan';
+  constructor(private social: SocialService) {}
 
-  constructor(private http: HttpClient) {}
-
-  /**
-   * Crea un nuevo plan de publicación y genera los targets para las páginas seleccionadas.
-   * El interceptor HTTP agregará automáticamente el token de autenticación.
-   */
   createPostPlan(request: CreatePostPlanRequest): Observable<CreatePostPlanResponse> {
-    return this.http.post<CreatePostPlanResponse>(this.apiUrl, request).pipe(
-      catchError(this.handleError)
-    );
+    const body = this.toSocialRequest(request);
+    return this.social.createPostPlan(body);
   }
 
-  /**
-   * Obtiene el detalle completo de un plan de publicación con sus targets.
-   * El interceptor HTTP agregará automáticamente el token de autenticación.
-   * @param planId ID del plan de publicación
-   */
   getPostPlanDetails(planId: number): Observable<PostPlanDetailsResponse> {
-    return this.http.get<PostPlanDetailsResponse>(`${this.apiUrl}/${planId}`).pipe(
-      catchError(this.handleError)
-    );
+    return this.social.getPostPlanDetails(planId);
   }
 
-  /**
-   * Obtiene la lista de planes de publicación en un rango de fechas.
-   * El interceptor HTTP agregará automáticamente el token de autenticación.
-   * @param start Fecha de inicio
-   * @param end Fecha de fin
-   * @param status Opcional: filtrar por estado (Pending, Published, Failed, Partial, Canceled)
-   * @param onlyWithPublishableTargets Opcional: solo planes con targets publicables
-   * @param q Opcional: búsqueda por texto
-   */
   getPostPlans(
-    start: Date, 
-    end: Date, 
-    status?: string, 
+    start: Date,
+    end: Date,
+    status?: string,
     onlyWithPublishableTargets?: boolean,
     q?: string
   ): Observable<PostPlanListResponse> {
-    // Convertir fechas a formato YYYY-MM-DD
-    const fromDate = this.formatDateToYYYYMMDD(start);
-    const toDate = this.formatDateToYYYYMMDD(end);
-    
-    let params = new HttpParams()
-      .set('from', fromDate)
-      .set('to', toDate);
-    
-    if (status) {
-      params = params.set('status', status);
-    }
-    
-    if (onlyWithPublishableTargets !== undefined) {
-      params = params.set('onlyWithPublishableTargets', onlyWithPublishableTargets.toString());
-    }
-    
-    if (q) {
-      params = params.set('q', q);
-    }
-    
-    return this.http.get<PostPlanListResponse>(this.apiUrl, { params }).pipe(
-      catchError(this.handleError)
-    );
+    return this.social.getPostPlans(start, end, status, onlyWithPublishableTargets, q);
   }
 
-  /**
-   * Convierte una fecha a formato YYYY-MM-DD
-   */
-  private formatDateToYYYYMMDD(date: Date): string {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+  getPublishAttempts(postTargetId: number): Observable<PublishAttempt[]> {
+    return this.social.getPublishAttempts(postTargetId);
+  }
+
+  private toSocialRequest(request: CreatePostPlanRequest): CreateSocialPostPlanRequest {
+    const body: CreateSocialPostPlanRequest = {
+      scheduledAt: request.scheduledAt,
+      timezone: request.timezone,
+      message: request.message
+    };
+
+    if (request.linkUrl) body.linkUrl = request.linkUrl;
+    if (request.imageUrl) body.imageUrl = request.imageUrl;
+    if (request.dedupeKey) body.dedupeKey = request.dedupeKey;
+    if (request.destinations?.length) body.destinations = request.destinations;
+    if (request.planMedia?.length) body.planMedia = request.planMedia;
+
+    if (request.providerOptions) {
+      body.providerOptions = request.providerOptions;
+    } else if (request.instagramContentType) {
+      const raw = request.instagramContentType;
+      const contentType = raw === 'reels' ? 'reel' : raw;
+      body.providerOptions = {
+        instagram: {
+          contentType: contentType as 'image' | 'carousel' | 'video' | 'reel',
+          publishAsReels: request.instagramPublishAsReels
+        }
+      };
+    }
+
+    return body;
   }
 
   private handleError = (error: HttpErrorResponse) => {
@@ -93,7 +78,8 @@ export class PostPlanService {
     } else {
       switch (error.status) {
         case 400:
-          errorMessage = error.error?.detail || error.error?.message || 'Solicitud inválida. Verifica los datos ingresados.';
+          errorMessage =
+            error.error?.detail || error.error?.message || 'Solicitud inválida. Verifica los datos ingresados.';
           break;
         case 401:
           errorMessage = 'Tu sesión ha expirado. Por favor, inicia sesión nuevamente.';
@@ -102,7 +88,8 @@ export class PostPlanService {
           errorMessage = 'Error del servidor. Por favor, intenta más tarde.';
           break;
         default:
-          errorMessage = error.error?.detail || error.error?.message || `Error ${error.status}: ${error.message}`;
+          errorMessage =
+            error.error?.detail || error.error?.message || `Error ${error.status}: ${error.message}`;
       }
     }
 

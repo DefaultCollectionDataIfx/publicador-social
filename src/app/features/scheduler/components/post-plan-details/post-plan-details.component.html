@@ -89,7 +89,7 @@
             <span class="target-icon">{{ getStatusIcon(target.status) }}</span>
             <div class="target-info">
               <h4 class="target-name">{{ target.name }}</h4>
-              <span class="target-id">ID: {{ target.facebookPageId }}</span>
+              <span class="target-id">{{ getTargetIdLabel(target) }}</span>
             </div>
             <span class="target-status-badge" [class]="getStatusClass(target.status)">
               {{ getStatusLabel(target.status) }}
@@ -106,6 +106,29 @@
               <span class="detail-label">Último intento:</span>
               <span class="detail-value">{{ formatDate(target.lastAttemptAt) }}</span>
             </div>
+          </div>
+
+          <div class="publish-progress" *ngIf="getPublishState(target) as pubState">
+            <p *ngIf="pubState.loading">Consultando progreso de publicación…</p>
+            <p *ngIf="pubState.error" class="error-message">{{ pubState.error }}</p>
+            <ng-container *ngIf="getLatestAttempt(target) as attempt">
+              <div class="detail-row" *ngIf="attempt.phase">
+                <span class="detail-label">Fase:</span>
+                <span class="detail-value">{{ attempt.phase }}</span>
+              </div>
+              <div class="detail-row" *ngIf="attempt.containerStatus">
+                <span class="detail-label">Estado contenedor:</span>
+                <span class="detail-value">{{ attempt.containerStatus }}</span>
+              </div>
+              <ul class="carousel-children" *ngIf="attempt.carouselChildren?.length">
+                <li *ngFor="let child of attempt.carouselChildren">
+                  Slide {{ child.sortOrder + 1 }} ({{ child.mimeType }}): {{ child.status }}
+                </li>
+              </ul>
+              <div *ngIf="attempt.errorUserMessage" class="target-error">
+                <div class="error-message">{{ attempt.errorUserMessage }}</div>
+              </div>
+            </ng-container>
           </div>
 
           <div *ngIf="target.lastError" class="target-error">

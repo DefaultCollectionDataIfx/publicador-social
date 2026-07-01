@@ -16,6 +16,7 @@ interface ViewOption {
 export class ProgramadorHeaderComponent {
   @Input() currentView: 'dayGridMonth' | 'timeGridWeek' | 'timeGridDay' = 'dayGridMonth';
   @Input() currentDateDisplay: string = '';
+  @Input() instagramQuotaRemaining: number | null = null;
   
   @Output() previous = new EventEmitter<void>();
   @Output() next = new EventEmitter<void>();

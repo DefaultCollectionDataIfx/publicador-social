@@ -1,23 +1,7 @@
 <div class="callback-container">
-  <div *ngIf="loading" class="loading-state">
+  <div class="loading-state">
     <div class="spinner"></div>
-    <p>Procesando conexión con Facebook...</p>
-  </div>
-
-  <div *ngIf="!loading && result" class="result-state">
-    <div *ngIf="result.pagesImported > 0" class="success-message">
-      <h2>¡Conexión exitosa!</h2>
-      <p>{{ result.message }}</p>
-      <p>Páginas importadas: {{ result.pagesImported }}</p>
-    </div>
-    <div *ngIf="result.errors > 0" class="warning-message">
-      <p>Se importaron {{ result.pagesImported }} página(s) con {{ result.errors }} error(es).</p>
-    </div>
-  </div>
-
-  <div *ngIf="error" class="error-state">
-    <h2>Error</h2>
-    <p>{{ error }}</p>
-    <button (click)="goToDashboard()">Volver al Dashboard</button>
+    <p>Redirigiendo a Cuentas conectadas…</p>
+    <p class="muted">El OAuth de Meta ya no usa esta ruta. Usa el botón Conectar en Cuentas.</p>
   </div>
 </div>

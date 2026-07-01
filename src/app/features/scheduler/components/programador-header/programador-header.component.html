@@ -37,6 +37,9 @@
   </div>
   
   <div class="header-right">
+    <span class="ig-quota-badge" *ngIf="instagramQuotaRemaining !== null">
+      Cupo IG: {{ instagramQuotaRemaining }} restantes
+    </span>
     <button 
       class="action-btn new-post-btn" 
       (click)="onNewPost()"

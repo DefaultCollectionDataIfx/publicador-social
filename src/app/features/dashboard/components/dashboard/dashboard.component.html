@@ -14,7 +14,7 @@
 
     <nav class="sidebar-nav">
       <ul class="menu-list">
-        <li *ngFor="let item of visibleMenuItems" class="menu-item" [class.has-submenu]="item.hasSubmenu" [class.expanded]="isSubmenuExpanded(item.label)">
+        <li *ngFor="let item of visibleMenuItems; trackBy: trackByMenuLabel" class="menu-item" [class.has-submenu]="item.hasSubmenu" [class.expanded]="isSubmenuExpanded(item.label)">
           <!-- Item sin submenú -->
           <a 
             *ngIf="!item.hasSubmenu && item.route"
@@ -39,8 +39,11 @@
           </div>
 
           <!-- Submenú -->
-          <ul *ngIf="item.hasSubmenu && item.children && isSubmenuExpanded(item.label) && !sidebarCollapsed" class="submenu-list">
-            <li *ngFor="let child of item.children" class="submenu-item">
+          <ul
+            *ngIf="item.hasSubmenu && item.children"
+            [hidden]="!isSubmenuExpanded(item.label) || sidebarCollapsed"
+            class="submenu-list">
+            <li *ngFor="let child of item.children; trackBy: trackByChildLabel" class="submenu-item">
               <a 
                 [routerLink]="child.route" 
                 [class.active]="isSubmenuActive(child.route!, child.label === 'Páginas' ? 'pages' : 'groups')"
@@ -58,7 +61,7 @@
 
     <div class="sidebar-footer">
       <a routerLink="/dashboard/configuracion" class="menu-link footer-link" routerLinkActive="active">
-        <span class="menu-icon-wrapper" [innerHTML]="getConfigIcon()"></span>
+        <span class="menu-icon-wrapper" [innerHTML]="configIcon"></span>
         <span class="menu-label">Configuración</span>
       </a>
     </div>
@@ -108,7 +111,7 @@
         </button>
 
         <button class="action-btn notifications-btn" (click)="toggleNotifications()" title="Notificaciones">
-          <span class="notification-icon-wrapper" [innerHTML]="getNotificationIcon()"></span>
+          <span class="notification-icon-wrapper" [innerHTML]="notificationIcon"></span>
           <span class="notification-badge" *ngIf="!sidebarCollapsed">3</span>
         </button>
 

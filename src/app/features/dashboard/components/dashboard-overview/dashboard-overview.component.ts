@@ -68,7 +68,7 @@ export class DashboardOverviewComponent implements OnInit, OnDestroy {
   readonly quickActions: DashboardAction[] = [
     { label: 'Crear publicación', description: 'Ir al programador y crear contenido', route: '/dashboard/programador' },
     { label: 'Abrir mensajes', description: 'Atender conversaciones pendientes', route: '/dashboard/mensajes' },
-    { label: 'Conectar cuenta', description: 'Agregar nueva página o grupo', route: '/dashboard/cuentas' },
+    { label: 'Conectar cuenta', description: 'Agregar nueva página o grupo', route: '/dashboard/cuentas-conectadas' },
     { label: 'Ver analítica', description: 'Revisar rendimiento por canal', route: '/dashboard/analiticas' }
   ];
   private subscriptions = new Subscription();

@@ -1,8 +1,15 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Observable, throwError } from 'rxjs';
-import { catchError, map } from 'rxjs/operators';
-import { FacebookConnectResponse, FacebookPage, FacebookPagesResponse, UpdatePageStatusRequest, UpdatePageStatusResponse, PageOverviewResponse } from '../../features/facebook/models/facebook.model';
+import { catchError, map, switchMap } from 'rxjs/operators';
+import {
+  FacebookPage,
+  FacebookPagesResponse,
+  PageOverviewResponse,
+  UpdatePageStatusResponse
+} from '../../features/facebook/models/facebook.model';
+import { MetaConnectService } from './meta-connect.service';
+import { SocialService } from './social.service';
 
 @Injectable({
   providedIn: 'root'
@@ -10,88 +17,88 @@ import { FacebookConnectResponse, FacebookPage, FacebookPagesResponse, UpdatePag
 export class FacebookOAuthService {
   private readonly apiUrl = '/api/Facebook';
 
-  constructor(private http: HttpClient) {}
+  constructor(
+    private http: HttpClient,
+    private metaConnect: MetaConnectService,
+    private social: SocialService
+  ) {}
 
   /**
-   * Inicia el flujo de conexión con Facebook.
-   * Redirige al usuario a Facebook para autorización.
-   * El interceptor HTTP agregará automáticamente el token de autenticación.
+   * @deprecated Usar MetaConnectService.connectFacebookWithPopup()
    */
   connectFacebook(): void {
-    this.http.get<FacebookConnectResponse>(
-      `${this.apiUrl}/connect`
-    ).pipe(
-      catchError(this.handleError)
-    ).subscribe({
-      next: (response) => {
-        window.location.href = response.data.authorizationUrl;
-      },
+    this.metaConnect.connectFacebookWithPopup().subscribe({
       error: (error) => {
         console.error('Error al conectar Facebook:', error);
       }
     });
   }
 
-  /**
-   * Obtiene las páginas de Facebook conectadas del usuario.
-   * El interceptor HTTP agregará automáticamente el token de autenticación.
-   */
   getConnectedPages(): Observable<FacebookPage[]> {
-    return this.http.get<FacebookPagesResponse>(
-      `${this.apiUrl}/pages`
-    ).pipe(
-      map(response => response.data),
-      catchError(this.handleError)
-    );
+    return this.social
+      .getAccounts({ providerGroup: 'meta', provider: 'facebook', accountType: 'page' })
+      .pipe(map((accounts) => accounts.map((a) => this.social.accountToFacebookPage(a))));
   }
 
-  /**
-   * Obtiene las páginas de Facebook conectadas del usuario con metadatos de paginación.
-   * El interceptor HTTP agregará automáticamente el token de autenticación.
-   */
   getConnectedPagesWithMeta(): Observable<FacebookPagesResponse> {
-    return this.http.get<FacebookPagesResponse>(
-      `${this.apiUrl}/pages`
-    ).pipe(
-      catchError(this.handleError)
-    );
+    return this.social
+      .getAccounts({ providerGroup: 'meta', provider: 'facebook', accountType: 'page' })
+      .pipe(
+        map((accounts) => ({
+          data: accounts.map((a) => this.social.accountToFacebookPage(a)),
+          meta: {
+            totalCount: accounts.length,
+            pageSize: accounts.length,
+            currentPage: 1,
+            totalPages: 1,
+            hasNextPage: false,
+            hasPreviusPage: false,
+            nextPageUrl: '',
+            previusPageUrl: ''
+          }
+        }))
+      );
   }
 
-  /**
-   * Actualiza el estado (isActive) de una página de Facebook.
-   * El interceptor HTTP agregará automáticamente el token de autenticación.
-   * @param facebookPageId ID de la página en Facebook
-   * @param isActive Nuevo estado de la página
-   */
   updatePageStatus(facebookPageId: string, isActive: boolean): Observable<UpdatePageStatusResponse> {
-    const requestBody: UpdatePageStatusRequest = { isActive };
-    return this.http.patch<UpdatePageStatusResponse>(
-      `${this.apiUrl}/pages/${facebookPageId}/status`,
-      requestBody
-    ).pipe(
-      catchError(this.handleError)
-    );
+    return this.social
+      .getAccounts({ providerGroup: 'meta', provider: 'facebook', accountType: 'page' })
+      .pipe(
+        map((accounts) => accounts.find((a) => a.externalAccountId === facebookPageId)),
+        switchMap((account) => {
+          if (!account) {
+            return throwError(() => new Error('Página no encontrada.'));
+          }
+          return this.social.updateAccountStatus(account.id, isActive);
+        }),
+        map((updated) => ({
+          data: this.social.accountToFacebookPage(updated),
+          meta: {
+            totalCount: 1,
+            pageSize: 1,
+            currentPage: 1,
+            totalPages: 1,
+            hasNextPage: false,
+            hasPreviusPage: false,
+            nextPageUrl: '',
+            previusPageUrl: ''
+          }
+        })),
+        catchError(this.handleError)
+      );
   }
 
   /**
-   * Obtiene un resumen completo (overview) de una página de Facebook.
-   * Incluye header de la página, resumen de analytics, contadores operativos,
-   * publicaciones recientes y alertas.
-   * El interceptor HTTP agregará automáticamente el token de autenticación.
-   * @param facebookPageId ID de la página en Facebook
-   * @param recentPostsLimit Cantidad de publicaciones recientes a obtener (opcional, por defecto: 10)
-   * @returns Observable con el overview completo de la página
+   * @deprecated Sin endpoint en API social; fuera de alcance.
    */
   getPageOverview(facebookPageId: string, recentPostsLimit?: number): Observable<PageOverviewResponse> {
     let url = `${this.apiUrl}/pages/${facebookPageId}/overview`;
-    
+
     if (recentPostsLimit !== undefined) {
       url += `?recentPostsLimit=${recentPostsLimit}`;
     }
-    
-    return this.http.get<PageOverviewResponse>(url).pipe(
-      catchError(this.handleError)
-    );
+
+    return this.http.get<PageOverviewResponse>(url).pipe(catchError(this.handleError));
   }
 
   private handleError = (error: HttpErrorResponse) => {

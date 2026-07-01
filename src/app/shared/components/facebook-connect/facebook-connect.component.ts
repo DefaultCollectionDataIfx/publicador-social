@@ -1,29 +1,24 @@
-import { Component } from '@angular/core';
-import { CommonModule } from '@angular/common';
-import { FacebookOAuthService } from '../../../core/services/facebook-oauth.service';
-
-@Component({
-  selector: 'app-facebook-connect',
-  standalone: true,
-  imports: [CommonModule],
-  templateUrl: './facebook-connect.component.html',
-  styleUrl: './facebook-connect.component.scss'
-})
-export class FacebookConnectComponent {
-  loading = false;
-
-  constructor(private facebookService: FacebookOAuthService) {}
-
-  onConnectFacebook(): void {
-    this.loading = true;
-    
-    try {
-      this.facebookService.connectFacebook();
-      // No necesitamos hacer loading = false porque el navegador se redirige
-    } catch (error) {
-      this.loading = false;
-      console.error('Error al conectar Facebook:', error);
-      alert('Error al conectar con Facebook. Por favor, intenta nuevamente.');
-    }
-  }
-}
+import { Component, EventEmitter, Output } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { MetaConnectComponent } from '../meta-connect/meta-connect.component';
+import { SocialConnectionType } from '../../../features/social/models/social.model';
+
+/** @deprecated Usar app-meta-connect directamente */
+@Component({
+  selector: 'app-facebook-connect',
+  standalone: true,
+  imports: [CommonModule, MetaConnectComponent],
+  template: `
+    <app-meta-connect
+      connectionType="facebook_login"
+      label="Conectar Facebook"
+      (connectionSuccess)="connectionSuccess.emit($event)"
+      (connectionError)="connectionError.emit($event)">
+    </app-meta-connect>
+  `
+})
+export class FacebookConnectComponent {
+  @Output() connectionSuccess = new EventEmitter<SocialConnectionType>();
+  @Output() connectionError = new EventEmitter<string>();
+}
+

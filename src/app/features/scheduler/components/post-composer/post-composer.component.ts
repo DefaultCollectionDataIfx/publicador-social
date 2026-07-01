@@ -11,26 +11,36 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import {
-  AbstractControl,
   FormBuilder,
   FormGroup,
   ReactiveFormsModule,
-  ValidationErrors,
-  ValidatorFn,
+  FormsModule,
   Validators
 } from '@angular/forms';
 import { Subscription } from 'rxjs';
 import { debounceTime, distinctUntilChanged } from 'rxjs/operators';
 import { PostPlanService } from '../../services/post-plan.service';
 import { CreatePostPlanRequest } from '../../models/post-plan.model';
-import { FacebookOAuthService } from '../../../../core/services/facebook-oauth.service';
+import { MetaConnectService } from '../../../../core/services/meta-connect.service';
+import { SocialService } from '../../../../core/services/social.service';
+import { SocialAccount } from '../../../social/models/social.model';
 import { TenantEntitlementsResponse } from '../../../../core/models/tenant.model';
 import { TenantEntitlementsService } from '../../../../core/services/tenant-entitlements.service';
 import { canUseLimit, getLimitValue, isFeatureEnabled } from '../../../../core/utils/entitlements.utils';
 import { FacebookPage } from '../../../facebook/models/facebook.model';
 import { markFormGroupTouched, isFieldInvalid } from '../../../../shared/utils/form.utils';
-import { extractErrorMessage } from '../../../../shared/utils/error.utils';
+import { extractMetaError } from '../../../../shared/utils/meta-error.utils';
 import { getFieldError } from '../../../../shared/utils/validation.utils';
+import {
+  accountSupportsContentType,
+  buildInstagramProviderOptions,
+  buildPlanMedia,
+  ComposerMediaSelection,
+  inferInstagramContentType,
+  isInstagramAccountSelectable,
+  validateInstagramMediaSelection
+} from '../../utils/instagram-composer.utils';
+import { environment } from '../../../../../environments/environment';
 import {
   PostComposerMediaPanelComponent,
   MediaAppliedPayload,
@@ -39,13 +49,6 @@ import {
 import { MediaSelectionService } from '../../../media/services/media-selection.service';
 
 const DRAFT_STORAGE_KEY = 'publicador.postComposer.draft.v1';
-
-function atLeastOnePageSelected(): ValidatorFn {
-  return (control: AbstractControl): ValidationErrors | null => {
-    const ids = control.value as string[] | null | undefined;
-    return ids && ids.length > 0 ? null : { requiredPages: true };
-  };
-}
 
 export type PreviewNetworkId = 'facebook' | 'instagram' | 'linkedin';
 
@@ -57,6 +60,11 @@ interface ComposerDraftPayload {
   imageUrl: string;
   mediaId?: number | null;
   pageIds: string[];
+  facebookAccountIds: number[];
+  instagramAccountIds: number[];
+  planMedia: ComposerMediaSelection[];
+  publishAsReel: boolean;
+  previewNetwork: PreviewNetworkId;
   dedupeKey: string;
   publishMode: 'now' | 'schedule';
   savedAt: string;
@@ -65,7 +73,7 @@ interface ComposerDraftPayload {
 @Component({
   selector: 'app-post-composer',
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule, PostComposerMediaPanelComponent],
+  imports: [CommonModule, ReactiveFormsModule, FormsModule, PostComposerMediaPanelComponent],
   templateUrl: './post-composer.component.html',
   styleUrl: './post-composer.component.scss'
 })
@@ -78,7 +86,14 @@ export class PostComposerComponent implements OnInit, OnDestroy {
 
   postPlanForm!: FormGroup;
   pages: FacebookPage[] = [];
+  facebookAccounts: SocialAccount[] = [];
+  facebookAccountIds: number[] = [];
+  instagramAccounts: SocialAccount[] = [];
   loadingPages = true;
+  loadingInstagram = false;
+  instagramAccountIds: number[] = [];
+  planMediaItems: ComposerMediaSelection[] = [];
+  publishAsReel = true;
   isLoading = false;
   errorMessage = '';
   entitlements: TenantEntitlementsResponse['data'] | null = null;
@@ -104,7 +119,8 @@ export class PostComposerComponent implements OnInit, OnDestroy {
   private hasPendingSelection = false;
 
   readonly charLimitFacebook = 5000;
-  readonly placeholderNetworks: { id: PreviewNetworkId; label: string; available: boolean }[] = [
+  readonly charLimitInstagram = 2200;
+  placeholderNetworks: { id: PreviewNetworkId; label: string; available: boolean }[] = [
     { id: 'facebook', label: 'Facebook', available: true },
     { id: 'instagram', label: 'Instagram', available: false },
     { id: 'linkedin', label: 'LinkedIn', available: false }
@@ -131,7 +147,8 @@ export class PostComposerComponent implements OnInit, OnDestroy {
   constructor(
     private fb: FormBuilder,
     private postPlanService: PostPlanService,
-    private facebookService: FacebookOAuthService,
+    private metaConnect: MetaConnectService,
+    private social: SocialService,
     private tenantEntitlements: TenantEntitlementsService,
     private mediaSelection: MediaSelectionService
   ) {}
@@ -144,6 +161,7 @@ export class PostComposerComponent implements OnInit, OnDestroy {
       this.tryRestoreDraft();
     }
     this.loadPages();
+    this.loadInstagramAccounts();
     this.refreshEntitlements();
     this.setupAutosave();
   }
@@ -178,7 +196,6 @@ export class PostComposerComponent implements OnInit, OnDestroy {
       linkUrl: [''],
       imageUrl: [''],
       mediaId: [null as number | null],
-      pageIds: [[], [atLeastOnePageSelected()]],
       dedupeKey: ['']
     });
   }
@@ -212,9 +229,17 @@ export class PostComposerComponent implements OnInit, OnDestroy {
         linkUrl: d.linkUrl || '',
         imageUrl: d.imageUrl || '',
         mediaId: d.mediaId != null ? d.mediaId : null,
-        pageIds: Array.isArray(d.pageIds) ? d.pageIds : [],
         dedupeKey: d.dedupeKey || ''
       });
+      this.facebookAccountIds = Array.isArray(d.facebookAccountIds)
+        ? d.facebookAccountIds
+        : [];
+      this.instagramAccountIds = Array.isArray(d.instagramAccountIds) ? d.instagramAccountIds : [];
+      this.planMediaItems = Array.isArray(d.planMedia) ? d.planMedia : [];
+      this.publishAsReel = d.publishAsReel !== false;
+      if (d.previewNetwork === 'facebook' || d.previewNetwork === 'instagram') {
+        this.previewNetwork = d.previewNetwork;
+      }
       if (d.publishMode === 'now' || d.publishMode === 'schedule') {
         this.publishMode = d.publishMode;
       }
@@ -243,7 +268,12 @@ export class PostComposerComponent implements OnInit, OnDestroy {
       linkUrl: v.linkUrl || '',
       imageUrl: v.imageUrl || '',
       mediaId: v.mediaId != null ? v.mediaId : null,
-      pageIds: v.pageIds || [],
+      pageIds: [],
+      facebookAccountIds: this.facebookAccountIds,
+      instagramAccountIds: this.instagramAccountIds,
+      planMedia: this.planMediaItems,
+      publishAsReel: this.publishAsReel,
+      previewNetwork: this.previewNetwork,
       dedupeKey: v.dedupeKey || '',
       publishMode: this.publishMode,
       savedAt: new Date().toISOString()
@@ -271,12 +301,20 @@ export class PostComposerComponent implements OnInit, OnDestroy {
 
   loadPages(): void {
     this.loadingPages = true;
-    const pagesSubscription = this.facebookService.getConnectedPages().subscribe({
-      next: (pages) => {
-        this.pages = pages.filter((page) => page.isActive && page.canPublish);
-        this.loadingPages = false;
-        this.updatePostPlanGate();
-      },
+    const pagesSubscription = this.social
+      .getAccounts({
+        providerGroup: 'meta',
+        provider: 'facebook',
+        accountType: 'page',
+        forPublishing: true
+      })
+      .subscribe({
+        next: (accounts) => {
+          this.facebookAccounts = accounts.filter((a) => a.isActive && a.canPublish);
+          this.pages = this.facebookAccounts.map((a) => this.social.accountToFacebookPage(a));
+          this.loadingPages = false;
+          this.updatePostPlanGate();
+        },
       error: () => {
         this.loadingPages = false;
         this.errorMessage = 'Error al cargar las páginas de Facebook. Por favor, intenta nuevamente.';
@@ -285,17 +323,48 @@ export class PostComposerComponent implements OnInit, OnDestroy {
     this.subscriptions.add(pagesSubscription);
   }
 
+  loadInstagramAccounts(): void {
+    this.loadingInstagram = true;
+    const sub = this.metaConnect
+      .getAccounts({ forPublishing: true, includeQuota: true, provider: 'instagram' })
+      .subscribe({
+        next: (accounts) => {
+          this.instagramAccounts = accounts;
+          this.loadingInstagram = false;
+          this.updatePostPlanGate();
+        },
+        error: () => {
+          this.loadingInstagram = false;
+        }
+      });
+    this.subscriptions.add(sub);
+  }
+
+  get isInstagramMode(): boolean {
+    return this.previewNetwork === 'instagram';
+  }
+
+  get mediaPanelMultiSelect(): boolean {
+    return this.isInstagramMode;
+  }
+
   private refreshEntitlements(): void {
     const sub = this.tenantEntitlements.refreshCurrentEntitlements().subscribe((data) => {
       this.entitlements = data;
+      const igEnabled = !data || isFeatureEnabled(data.features, 'network.instagram');
+      this.placeholderNetworks = this.placeholderNetworks.map((n) =>
+        n.id === 'instagram' ? { ...n, available: igEnabled } : n
+      );
       this.updatePostPlanGate();
     });
     this.subscriptions.add(sub);
   }
 
   private computeSelectedDelta(): number {
-    const pageIds: string[] = this.postPlanForm.get('pageIds')?.value || [];
-    return pageIds.length;
+    if (this.isInstagramMode) {
+      return this.instagramAccountIds.length;
+    }
+    return this.facebookAccountIds.length;
   }
 
   private updatePostPlanGate(): void {
@@ -304,7 +373,12 @@ export class PostComposerComponent implements OnInit, OnDestroy {
       this.limitGateErrorMessage = null;
       return;
     }
-    if (this.loadingPages) {
+    if (this.loadingPages && !this.isInstagramMode) {
+      this.canCreatePostPlan = true;
+      this.limitGateErrorMessage = null;
+      return;
+    }
+    if (this.loadingInstagram && this.isInstagramMode) {
       this.canCreatePostPlan = true;
       this.limitGateErrorMessage = null;
       return;
@@ -317,11 +391,19 @@ export class PostComposerComponent implements OnInit, OnDestroy {
       return;
     }
 
-    const pagesEnabled = isFeatureEnabled(this.entitlements.features, 'network.facebook.pages');
-    if (!pagesEnabled) {
-      this.canCreatePostPlan = false;
-      this.limitGateErrorMessage = 'Tu plan no permite publicar con Facebook Pages.';
-      return;
+    if (this.isInstagramMode) {
+      if (!isFeatureEnabled(this.entitlements.features, 'network.instagram')) {
+        this.canCreatePostPlan = false;
+        this.limitGateErrorMessage = 'Tu plan no permite publicar en Instagram.';
+        return;
+      }
+    } else {
+      const pagesEnabled = isFeatureEnabled(this.entitlements.features, 'network.facebook.pages');
+      if (!pagesEnabled) {
+        this.canCreatePostPlan = false;
+        this.limitGateErrorMessage = 'Tu plan no permite publicar con Facebook Pages.';
+        return;
+      }
     }
 
     const postsThisMonth = this.entitlements.currentUsage.postsThisMonth ?? 0;
@@ -349,6 +431,14 @@ export class PostComposerComponent implements OnInit, OnDestroy {
     this.limitGateErrorMessage = null;
   }
 
+  private updateMessageValidators(): void {
+    const ctrl = this.postPlanForm.get('message');
+    if (!ctrl) return;
+    const limit = this.isInstagramMode ? this.charLimitInstagram : this.charLimitFacebook;
+    ctrl.setValidators([Validators.required, Validators.minLength(1), Validators.maxLength(limit)]);
+    ctrl.updateValueAndValidity();
+  }
+
   setPublishMode(mode: 'now' | 'schedule'): void {
     this.publishMode = mode;
     const schedCtrl = this.postPlanForm.get('scheduledAt');
@@ -364,44 +454,99 @@ export class PostComposerComponent implements OnInit, OnDestroy {
     const row = this.placeholderNetworks.find((n) => n.id === id);
     if (row && !row.available) return;
     this.previewNetwork = id;
-  }
-
-  togglePageSelection(pageId: string): void {
-    const pageIdsControl = this.postPlanForm.get('pageIds');
-    if (!pageIdsControl) return;
-    const currentIds: string[] = pageIdsControl.value || [];
-    const index = currentIds.indexOf(pageId);
-    if (index > -1) {
-      currentIds.splice(index, 1);
-    } else {
-      currentIds.push(pageId);
-    }
-    pageIdsControl.setValue([...currentIds]);
-    pageIdsControl.markAsTouched();
+    this.updateMessageValidators();
     this.updatePostPlanGate();
   }
 
+  toggleInstagramAccount(accountId: number): void {
+    const idx = this.instagramAccountIds.indexOf(accountId);
+    if (idx >= 0) {
+      this.instagramAccountIds.splice(idx, 1);
+    } else {
+      this.instagramAccountIds.push(accountId);
+    }
+    this.instagramAccountIds = [...this.instagramAccountIds];
+    this.updatePostPlanGate();
+  }
+
+  isInstagramAccountSelected(accountId: number): boolean {
+    return this.instagramAccountIds.includes(accountId);
+  }
+
+  isInstagramAccountDisabled(account: SocialAccount): boolean {
+    return !isInstagramAccountSelectable(account);
+  }
+
+  getInstagramQuotaLabel(account: SocialAccount): string {
+    if (!account.publishingQuota) return '';
+    return `${account.publishingQuota.remaining} restantes`;
+  }
+
+  selectAllInstagramAccounts(): void {
+    this.instagramAccountIds = this.instagramAccounts
+      .filter((a) => isInstagramAccountSelectable(a))
+      .map((a) => a.id);
+    this.updatePostPlanGate();
+  }
+
+  deselectAllInstagramAccounts(): void {
+    this.instagramAccountIds = [];
+    this.updatePostPlanGate();
+  }
+
+  get selectedInstagramAccounts(): SocialAccount[] {
+    return this.instagramAccounts.filter((a) => this.instagramAccountIds.includes(a.id));
+  }
+
+  removePlanMediaItem(mediaId: number): void {
+    this.planMediaItems = this.planMediaItems.filter((m) => m.composerMediaId !== mediaId);
+  }
+
+  get hasVideoInPlanMedia(): boolean {
+    return this.planMediaItems.some((m) => m.mimeType.startsWith('video/'));
+  }
+
+  toggleFacebookAccount(accountId: number): void {
+    const idx = this.facebookAccountIds.indexOf(accountId);
+    if (idx >= 0) {
+      this.facebookAccountIds.splice(idx, 1);
+    } else {
+      this.facebookAccountIds.push(accountId);
+    }
+    this.facebookAccountIds = [...this.facebookAccountIds];
+    this.updatePostPlanGate();
+  }
+
+  isFacebookAccountSelected(accountId: number): boolean {
+    return this.facebookAccountIds.includes(accountId);
+  }
+
+  togglePageSelection(pageId: string): void {
+    const account = this.facebookAccounts.find((a) => a.externalAccountId === pageId);
+    if (account) {
+      this.toggleFacebookAccount(account.id);
+    }
+  }
+
   isPageSelected(pageId: string): boolean {
-    const pageIds: string[] = this.postPlanForm.get('pageIds')?.value || [];
-    return pageIds.includes(pageId);
+    const account = this.facebookAccounts.find((a) => a.externalAccountId === pageId);
+    return account ? this.isFacebookAccountSelected(account.id) : false;
   }
 
   selectAllPages(): void {
-    const allPageIds = this.pages.map((page) => page.facebookPageId);
-    this.postPlanForm.get('pageIds')?.setValue(allPageIds);
-    this.postPlanForm.get('pageIds')?.markAsTouched();
+    this.facebookAccountIds = this.facebookAccounts.map((a) => a.id);
     this.updatePostPlanGate();
   }
 
   deselectAllPages(): void {
-    this.postPlanForm.get('pageIds')?.setValue([]);
-    this.postPlanForm.get('pageIds')?.markAsTouched();
+    this.facebookAccountIds = [];
     this.updatePostPlanGate();
   }
 
   get selectedPages(): FacebookPage[] {
-    const ids: string[] = this.postPlanForm.get('pageIds')?.value || [];
-    return this.pages.filter((p) => ids.includes(p.facebookPageId));
+    return this.facebookAccounts
+      .filter((a) => this.facebookAccountIds.includes(a.id))
+      .map((a) => this.social.accountToFacebookPage(a));
   }
 
   get primaryPreviewPage(): FacebookPage | null {
@@ -415,7 +560,7 @@ export class PostComposerComponent implements OnInit, OnDestroy {
 
   /** Límite de caracteres mostrado (por red cuando exista API). */
   get charLimitActive(): number {
-    return this.charLimitFacebook;
+    return this.isInstagramMode ? this.charLimitInstagram : this.charLimitFacebook;
   }
 
   insertIntoMessage(text: string): void {
@@ -483,7 +628,31 @@ export class PostComposerComponent implements OnInit, OnDestroy {
   }
 
   onMediaApplied(payload: MediaAppliedPayload): void {
+    if (this.isInstagramMode && payload.selections?.length) {
+      if (payload.selections.length === 1 && !this.mediaPanelMultiSelect) {
+        this.planMediaItems = payload.selections;
+      } else if (this.mediaPanelMultiSelect) {
+        const merged = [...this.planMediaItems];
+        for (const sel of payload.selections) {
+          if (!merged.some((m) => m.composerMediaId === sel.composerMediaId)) {
+            merged.push(sel);
+          }
+        }
+        this.planMediaItems = merged.slice(0, 10);
+      } else {
+        this.planMediaItems = payload.selections;
+      }
+      const first = this.planMediaItems[0];
+      if (first?.publicUrl) {
+        this.postPlanForm.patchValue({ imageUrl: first.publicUrl, mediaId: null });
+      }
+      return;
+    }
+
     if (payload.mediaId != null && payload.mediaId !== undefined) {
+      this.planMediaItems = payload.selections?.length
+        ? payload.selections
+        : [{ composerMediaId: payload.mediaId, mimeType: 'image/jpeg', publicUrl: payload.imageUrl }];
       this.postPlanForm.patchValue({
         mediaId: payload.mediaId,
         imageUrl: payload.imageUrl?.trim() ?? ''
@@ -493,8 +662,13 @@ export class PostComposerComponent implements OnInit, OnDestroy {
         mediaId: null,
         imageUrl: payload.imageUrl?.trim() ?? ''
       });
+      this.planMediaItems = [];
     }
     this.postPlanForm.get('imageUrl')?.markAsTouched();
+  }
+
+  get selectedPlanMediaIds(): number[] {
+    return this.planMediaItems.map((m) => m.composerMediaId);
   }
 
   previewImageSrc(): string | null {
@@ -527,6 +701,31 @@ export class PostComposerComponent implements OnInit, OnDestroy {
       return;
     }
 
+    if (this.isInstagramMode) {
+      const mediaError = validateInstagramMediaSelection(this.planMediaItems, environment.metaAllowMixedCarousel);
+      if (mediaError) {
+        this.errorMessage = mediaError;
+        return;
+      }
+      if (this.instagramAccountIds.length === 0) {
+        this.errorMessage = 'Selecciona al menos una cuenta de Instagram.';
+        return;
+      }
+      const contentType = inferInstagramContentType(this.planMediaItems, this.publishAsReel);
+      for (const id of this.instagramAccountIds) {
+        const account = this.instagramAccounts.find((a) => a.id === id);
+        if (account && !accountSupportsContentType(account, contentType)) {
+          this.errorMessage = `La cuenta "${account.displayName}" no admite este tipo de contenido.`;
+          return;
+        }
+      }
+    } else {
+      if (this.facebookAccountIds.length === 0) {
+        this.errorMessage = 'Selecciona al menos una página de Facebook.';
+        return;
+      }
+    }
+
     this.isLoading = true;
     this.errorMessage = '';
 
@@ -544,36 +743,49 @@ export class PostComposerComponent implements OnInit, OnDestroy {
       message: formValue.message.trim()
     };
 
-    if (formValue.linkUrl?.trim()) {
-      request.linkUrl = formValue.linkUrl.trim();
+    if (this.isInstagramMode) {
+      request.destinations = this.instagramAccountIds.map((id) => ({ managedSocialAccountId: id }));
+      request.planMedia = buildPlanMedia(this.planMediaItems);
+      request.providerOptions = {
+        instagram: buildInstagramProviderOptions(this.planMediaItems, this.publishAsReel)
+      };
+    } else {
+      request.destinations = this.facebookAccountIds.map((id) => ({ managedSocialAccountId: id }));
+      if (formValue.linkUrl?.trim()) {
+        request.linkUrl = formValue.linkUrl.trim();
+      }
+      if (formValue.imageUrl?.trim()) {
+        request.imageUrl = formValue.imageUrl.trim();
+      }
+      if (this.planMediaItems.length) {
+        request.planMedia = buildPlanMedia(this.planMediaItems);
+      } else if (formValue.mediaId != null && typeof formValue.mediaId === 'number') {
+        request.planMedia = buildPlanMedia([
+          { composerMediaId: formValue.mediaId, mimeType: 'image/jpeg' }
+        ]);
+      }
     }
-    if (formValue.imageUrl?.trim()) {
-      request.imageUrl = formValue.imageUrl.trim();
-    }
-    const mid = formValue.mediaId;
-    if (mid != null && typeof mid === 'number') {
-      request.mediaId = mid;
-    }
+
     if (formValue.dedupeKey?.trim()) {
       request.dedupeKey = formValue.dedupeKey.trim();
-    }
-    if (formValue.pageIds && formValue.pageIds.length > 0) {
-      request.pageIds = formValue.pageIds;
     }
 
     const createSubscription = this.postPlanService.createPostPlan(request).subscribe({
       next: () => {
         this.isLoading = false;
         this.clearDraftStorage();
+        this.planMediaItems = [];
+        this.instagramAccountIds = [];
+        this.facebookAccountIds = [];
         this.success.emit();
         this.tenantEntitlements.refreshCurrentEntitlements().subscribe(() => this.updatePostPlanGate());
       },
       error: (error) => {
         this.isLoading = false;
-        this.errorMessage = extractErrorMessage(
+        this.errorMessage = extractMetaError(
           error,
           'Error al crear el plan de publicación. Por favor, intenta nuevamente.'
-        );
+        ).message;
       }
     });
 
@@ -592,9 +804,15 @@ export class PostComposerComponent implements OnInit, OnDestroy {
     return isFieldInvalid(this.postPlanForm, fieldName);
   }
 
+  accountsSelectionError(): boolean {
+    if (this.isInstagramMode) {
+      return this.instagramAccountIds.length === 0;
+    }
+    return this.facebookAccountIds.length === 0;
+  }
+
   pagesSelectionError(): boolean {
-    const c = this.postPlanForm.get('pageIds');
-    return !!(c && c.touched && c.errors?.['requiredPages']);
+    return this.accountsSelectionError();
   }
 
   ctaDisabled(): boolean {

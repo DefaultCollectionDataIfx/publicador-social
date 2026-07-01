@@ -1,7 +1,97 @@
 <div class="cuentas-container">
   <div class="header-section">
     <h1>Cuentas Conectadas</h1>
-    <p>Gestiona tus cuentas de redes sociales conectadas</p>
+    <p>Gestiona tus cuentas de Facebook e Instagram conectadas</p>
+  </div>
+
+  <div class="meta-summary" *ngIf="metaGroupStatus || metaStatusLoading">
+    <div *ngIf="metaStatusLoading" class="loading-state compact">
+      <div class="spinner"></div>
+      <p>Cargando estado Meta...</p>
+    </div>
+    <div *ngIf="confirmingConnection" class="loading-state compact meta-confirming">
+      <div class="spinner"></div>
+      <p>Confirmando conexión{{ confirmingConnection === 'facebook_login' ? ' de Facebook' : ' de Instagram' }}…</p>
+    </div>
+
+    <div *ngIf="!metaStatusLoading && metaStatusError" class="error-state compact">
+      <p>{{ metaStatusError }}</p>
+      <button (click)="loadMetaStatus()" class="retry-btn">Reintentar</button>
+    </div>
+    <div *ngIf="!metaStatusLoading && metaGroupStatus" class="meta-summary-grid">
+      <div class="meta-summary-item">
+        <span class="meta-label">Resumen Meta</span>
+        <span class="meta-value">
+          {{ metaGroupStatus.activeAccounts }} conectadas ·
+          {{ metaGroupStatus.canPublishAccounts }} publicables
+        </span>
+      </div>
+      <div class="meta-summary-item">
+        <span class="meta-label">Facebook</span>
+        <span class="meta-badge" [class.connected]="hasFacebookOAuthConnections() && !isFacebookConnectionWarning()" [class.warning]="isFacebookConnectionWarning()">
+          {{ getFacebookConnectionLabel() }}
+        </span>
+        <p class="meta-accounts-detail" *ngIf="hasFacebookOAuthConnections()">
+          <span class="meta-accounts-primary">{{ getConnectionActiveLabel(facebookConnectionStatus, 'page') }}</span><span class="meta-accounts-secondary" *ngIf="getConnectionInactiveLabel(facebookConnectionStatus) as inactive"> · {{ inactive }}</span>
+        </p>
+        <p class="meta-sync-detail" *ngIf="hasFacebookOAuthConnections()">
+          {{ getFacebookConnectionsBadgeLabel() }} · {{ getConnectionSyncSummary(facebookConnectionStatus) }}
+        </p>
+      </div>
+      <div class="meta-summary-item">
+        <span class="meta-label">Instagram</span>
+        <span class="meta-badge" [class.connected]="hasInstagramOAuthConnections() && !isInstagramConnectionWarning()" [class.warning]="isInstagramConnectionWarning()">
+          {{ getInstagramConnectionLabel() }}
+        </span>
+        <p class="meta-accounts-detail" *ngIf="hasInstagramOAuthConnections()">
+          <span class="meta-accounts-primary">{{ getInstagramAccountsBadgeLabel() }}</span>
+        </p>
+        <p class="meta-sync-detail" *ngIf="hasInstagramOAuthConnections()">
+          {{ getInstagramConnectionsBadgeLabel() }} · {{ getConnectionSyncSummary(instagramConnectionStatus) }}
+        </p>
+      </div>
+      <div class="meta-summary-item">
+        <span class="meta-label">Cupo IG (mín.)</span>
+        <span class="meta-value">{{ metaGroupStatus.minPublishingQuotaRemaining ?? '—' }} restantes</span>
+      </div>
+      <div class="meta-summary-actions">
+        <button class="btn-secondary" (click)="syncMetaAccounts()" [disabled]="syncingMeta">
+          {{ syncingMeta ? 'Sincronizando...' : 'Sincronizar Meta' }}
+        </button>
+      </div>
+    </div>
+
+    <div class="meta-alert" *ngIf="!metaStatusLoading && hasMetaAccountsSyncPending && !confirmingConnection">
+      <strong>Actualizando cuentas conectadas…</strong>
+      El sync de Meta terminó pero las páginas aún se están vinculando. Espera unos segundos; se actualizará solo.
+    </div>
+
+    <div class="meta-alert meta-alert-warn" *ngIf="!metaStatusLoading && !hasMetaAccountsSyncPending && hasMetaAccountsNeedingTokenRefresh">
+      <strong>Sincroniza o reconecta Meta.</strong>
+      Las cuentas siguen con token revocado. Activar con el interruptor no basta: usa «Sincronizar Meta» o reconecta OAuth.
+    </div>
+
+    <div class="meta-alert" *ngIf="pagesConnectedToast">
+      <strong>{{ pagesConnectedToast }}</strong>
+    </div>
+
+    <div class="meta-alert" *ngIf="igOAuthToast">
+      <strong>{{ igOAuthToast }}</strong>
+    </div>
+
+    <div class="meta-alert meta-alert-warn" *ngIf="igOAuthError">
+      <strong>{{ igOAuthError }}</strong>
+    </div>
+
+    <div class="meta-alert" *ngIf="!metaStatusLoading && !hasMetaAccountsSyncPending && hasMetaAccountsPendingActivation">
+      <strong>Cuentas Instagram listas para activar.</strong>
+      Actívalas con el interruptor en cada tarjeta.
+    </div>
+
+    <div class="meta-alert meta-alert-warn" *ngIf="!metaStatusLoading && !hasMetaAccountsPendingActivation && hasMetaAccountsNotPublishable && metaGroupStatus?.activeAccounts">
+      <strong>Sin cuentas publicables.</strong>
+      Hay cuentas activas pero ninguna puede publicar (token inválido o revocado). Revisa el estado del token en el detalle de conexión o reconecta OAuth.
+    </div>
   </div>
 
   <div class="connect-section">
@@ -13,17 +103,316 @@
           </svg>
           <div>
             <h2>Facebook</h2>
-            <p>Conecta tu cuenta de Facebook para publicar en tus páginas</p>
+            <p>Conecta vía Meta OAuth para publicar en tus páginas</p>
+            <p class="connect-meta-badge" *ngIf="hasFacebookOAuthConnections()">
+              {{ getFacebookConnectionsBadgeLabel() }}
+            </p>
           </div>
         </div>
-        <app-facebook-connect></app-facebook-connect>
+        <div class="connect-actions">
+          <app-meta-connect
+            *ngIf="!hasFacebookOAuthConnections()"
+            connectionType="facebook_login"
+            oauthMode="add"
+            [maxConnectionsPerTenant]="getMaxFacebookConnections()"
+            label="Conectar Facebook">
+          </app-meta-connect>
+          <app-meta-connect
+            *ngIf="hasFacebookOAuthConnections() && canAddFacebookConnection()"
+            connectionType="facebook_login"
+            oauthMode="add"
+            [maxConnectionsPerTenant]="getMaxFacebookConnections()"
+            label="Conectar otra cuenta Meta">
+          </app-meta-connect>
+          <button
+            *ngIf="hasFacebookOAuthConnections()"
+            class="btn-link-danger"
+            (click)="disconnectMeta('facebook_login')"
+            [disabled]="disconnectingMeta === 'facebook_login'">
+            {{ disconnectingMeta === 'facebook_login' ? 'Desconectando...' : 'Desconectar todas las cuentas Meta' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="meta-connections-panel" *ngIf="hasFacebookOAuthConnections() || loadingFacebookConnections">
+        <h3 class="meta-connections-title">Cuentas Meta autorizadas</h3>
+        <div *ngIf="loadingFacebookConnections" class="loading-state compact">
+          <div class="spinner"></div>
+          <p>Cargando conexiones...</p>
+        </div>
+        <ul class="meta-connections-list" *ngIf="!loadingFacebookConnections && facebookConnections.length > 0">
+          <li class="meta-connection-row" *ngFor="let conn of facebookConnections">
+            <div class="meta-connection-info">
+              <span class="meta-connection-label">{{ formatConnectionLabel(conn) }}</span>
+              <span class="meta-connection-detail">
+                {{ conn.activeAccountCount }} página{{ conn.activeAccountCount === 1 ? '' : 's' }} conectada{{ conn.activeAccountCount === 1 ? '' : 's' }} · Token {{ getConnectionTokenLabel(conn) }}
+              </span>
+            </div>
+            <div class="meta-connection-actions">
+              <button
+                type="button"
+                class="btn-connection-action"
+                (click)="openFacebookPageSelector(conn.id)"
+                [disabled]="isConnectionRowBusy(conn.id)">
+                Conectar páginas
+              </button>
+              <button
+                type="button"
+                class="btn-connection-action"
+                (click)="syncFacebookConnection(conn)"
+                [disabled]="isConnectionRowBusy(conn.id)">
+                {{ isSyncingConnection(conn.id) ? 'Sincronizando...' : 'Sincronizar' }}
+              </button>
+              <button
+                type="button"
+                class="btn-connection-action"
+                (click)="reauthFacebookConnection(conn)"
+                [disabled]="isConnectionRowBusy(conn.id)">
+                {{ isReauthingConnection(conn.id) ? 'Reautenticando...' : 'Reautenticar' }}
+              </button>
+              <button
+                type="button"
+                class="btn-connection-action btn-connection-danger"
+                (click)="disconnectFacebookConnection(conn)"
+                [disabled]="isConnectionRowBusy(conn.id)">
+                {{ isDisconnectingConnection(conn.id) ? 'Desconectando...' : 'Desconectar' }}
+              </button>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="connect-card instagram-card">
+      <div class="connect-header">
+        <div class="platform-info">
+          <svg class="platform-icon instagram" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/>
+          </svg>
+          <div>
+            <h2>Instagram</h2>
+            <p>Conecta clientes Instagram (1 OAuth = 1 cuenta)</p>
+            <p class="connect-meta-badge" *ngIf="hasInstagramOAuthConnections()">
+              {{ getInstagramConnectionsBadgeLabel() }} · {{ getInstagramAccountsBadgeLabel() }}
+            </p>
+          </div>
+        </div>
+        <div class="connect-actions">
+          <app-meta-connect
+            *ngIf="!hasInstagramOAuthConnections()"
+            connectionType="instagram_login"
+            oauthMode="add"
+            [maxConnectionsPerTenant]="getMaxInstagramConnections()"
+            [maxInstagramAccounts]="getMaxInstagramAccounts()"
+            label="Conectar cliente Instagram">
+          </app-meta-connect>
+          <app-meta-connect
+            *ngIf="hasInstagramOAuthConnections() && canAddInstagramConnection()"
+            connectionType="instagram_login"
+            oauthMode="add"
+            [maxConnectionsPerTenant]="getMaxInstagramConnections()"
+            [maxInstagramAccounts]="getMaxInstagramAccounts()"
+            label="Conectar otro cliente">
+          </app-meta-connect>
+          <button
+            *ngIf="hasInstagramOAuthConnections()"
+            class="btn-link-danger"
+            (click)="disconnectMeta('instagram_login')"
+            [disabled]="disconnectingMeta === 'instagram_login'">
+            {{ disconnectingMeta === 'instagram_login' ? 'Desconectando...' : 'Desconectar todas las cuentas Instagram' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="meta-connections-panel" *ngIf="hasInstagramOAuthConnections() || loadingInstagramConnections">
+        <h3 class="meta-connections-title">Clientes Instagram autorizados</h3>
+        <div *ngIf="loadingInstagramConnections" class="loading-state compact">
+          <div class="spinner"></div>
+          <p>Cargando conexiones...</p>
+        </div>
+        <ul class="meta-connections-list" *ngIf="!loadingInstagramConnections && instagramConnections.length > 0">
+          <li class="meta-connection-row" *ngFor="let conn of instagramConnections">
+            <div class="meta-connection-avatar" *ngIf="conn.displayPictureUrl">
+              <img [src]="conn.displayPictureUrl" [alt]="formatConnectionLabel(conn)" />
+            </div>
+            <div class="meta-connection-info">
+              <span class="meta-connection-label">{{ formatConnectionLabel(conn) }}</span>
+              <span class="meta-connection-detail">
+                {{ conn.activeAccountCount }} cuenta{{ conn.activeAccountCount === 1 ? '' : 's' }} · Token {{ getConnectionTokenLabel(conn) }}
+              </span>
+            </div>
+            <div class="meta-connection-actions">
+              <button
+                type="button"
+                class="btn-connection-action"
+                (click)="syncInstagramConnection(conn)"
+                [disabled]="isConnectionRowBusy(conn.id)">
+                {{ isSyncingConnection(conn.id) ? 'Sincronizando...' : 'Sincronizar' }}
+              </button>
+              <button
+                type="button"
+                class="btn-connection-action"
+                (click)="reauthInstagramConnection(conn)"
+                [disabled]="isConnectionRowBusy(conn.id)">
+                {{ isReauthingConnection(conn.id) ? 'Reautenticando...' : 'Reautenticar' }}
+              </button>
+              <button
+                type="button"
+                class="btn-connection-action btn-connection-danger"
+                (click)="disconnectInstagramConnection(conn)"
+                [disabled]="isConnectionRowBusy(conn.id)">
+                {{ isDisconnectingConnection(conn.id) ? 'Desconectando...' : 'Desconectar' }}
+              </button>
+            </div>
+          </li>
+        </ul>
       </div>
     </div>
   </div>
 
+  <!-- Instagram accounts -->
+  <div class="pages-section instagram-section">
+    <h2>Cuentas Instagram</h2>
+
+    <div *ngIf="loadingInstagram" class="loading-state">
+      <div class="spinner"></div>
+      <p>Cargando cuentas Instagram...</p>
+    </div>
+
+    <div *ngIf="!loadingInstagram && instagramError" class="error-state">
+      <p>{{ instagramError }}</p>
+      <button (click)="loadInstagramAccounts()" class="retry-btn">Reintentar</button>
+    </div>
+
+    <div *ngIf="!loadingInstagram && !instagramError && instagramAccounts.length === 0" class="empty-state">
+      <p>No hay cuentas Instagram conectadas</p>
+      <p class="empty-subtitle">Conecta Instagram para ver tus cuentas aquí</p>
+    </div>
+
+    <div *ngIf="!loadingInstagram && !instagramError && instagramActiveAccounts.length > 0" class="pages-grid">
+      <ng-container *ngFor="let account of instagramActiveAccounts">
+        <ng-container *ngTemplateOutlet="instagramAccountCard; context: { account: account }"></ng-container>
+      </ng-container>
+    </div>
+
+    <div *ngIf="!loadingInstagram && !instagramError && instagramInactiveAccounts.length > 0" class="pages-disconnected">
+      <h3 class="pages-disconnected-title">Cuentas desvinculadas</h3>
+      <p class="pages-disconnected-hint">Sin permisos en Meta. Reconéctalas para volver a publicar.</p>
+      <div class="pages-grid pages-grid-muted">
+        <ng-container *ngFor="let account of instagramInactiveAccounts">
+          <ng-container
+            *ngTemplateOutlet="isAccountDisconnectedRevoked(account) ? unlinkedAccountCard : instagramAccountCard; context: { account: account }">
+          </ng-container>
+        </ng-container>
+      </div>
+    </div>
+  </div>
+
+  <ng-template #unlinkedAccountCard let-account="account">
+    <div
+      class="page-card page-card-unlinked inactive"
+      tabindex="0"
+      [class.is-busy]="isAccountActionInProgress(account.id)">
+      <div class="page-card-unlinked-body">
+        <div class="page-header">
+          <div class="page-icon">
+            <img
+              *ngIf="account.pictureUrl"
+              [src]="account.pictureUrl"
+              [alt]="account.displayName"
+              class="page-avatar">
+            <div *ngIf="!account.pictureUrl" class="avatar-placeholder">{{ getAccountInitial(account.displayName) }}</div>
+          </div>
+          <div class="page-info">
+            <h3>{{ account.displayName }}</h3>
+            <p class="page-id">ID: {{ account.externalAccountId || account.id }}</p>
+            <p class="page-status-line">Estado: {{ getAccountStatusLabel(account) }}</p>
+          </div>
+        </div>
+      </div>
+      <div class="page-card-unlinked-overlay">
+        <ng-container *ngIf="!isAccountActionInProgress(account.id); else unlinkedAccountBusy">
+          <button
+            type="button"
+            class="btn-unlinked-action btn-unlinked-reconnect"
+            (click)="reconnectSocialAccount(account)"
+            [disabled]="isAccountActionInProgress(account.id)">
+            Reconectar
+          </button>
+          <button
+            *ngIf="canDeleteAccount(account)"
+            type="button"
+            class="btn-unlinked-action btn-unlinked-delete"
+            (click)="deleteAccountHistory(account)"
+            [disabled]="isAccountActionInProgress(account.id)">
+            Eliminar
+          </button>
+        </ng-container>
+        <ng-template #unlinkedAccountBusy>
+          <span class="page-card-unlinked-busy">
+            {{ isReconnectingAccount(account.id) ? 'Reconectando…' : 'Eliminando…' }}
+          </span>
+        </ng-template>
+      </div>
+    </div>
+  </ng-template>
+
+  <ng-template #instagramAccountCard let-account="account">
+      <div class="page-card" [class.inactive]="!account.isActive">
+        <div class="page-header">
+          <div class="page-icon">
+            <img *ngIf="account.pictureUrl" [src]="account.pictureUrl" [alt]="account.displayName" class="page-avatar">
+            <div *ngIf="!account.pictureUrl" class="avatar-placeholder">{{ getAccountInitial(account.displayName) }}</div>
+          </div>
+          <div class="page-info">
+            <h3>{{ account.displayName }}</h3>
+            <p class="page-id">ID: {{ account.id }}</p>
+            <p class="quota-text" *ngIf="account.publishingQuota">
+              Cupo: {{ account.publishingQuota.remaining }}/{{ account.publishingQuota.quotaTotal }}
+            </p>
+            <p class="page-hint warn" *ngIf="getInstagramPublishHint(account) as hint">{{ hint }}</p>
+            <div class="capabilities" *ngIf="account.capabilities">
+              <span class="cap-chip" *ngIf="account.capabilities.canPublishImage">Imagen</span>
+              <span class="cap-chip" *ngIf="account.capabilities.canPublishCarousel">Carrusel</span>
+              <span class="cap-chip" *ngIf="account.capabilities.canPublishVideo">Video</span>
+              <span class="cap-chip" *ngIf="account.capabilities.canPublishReels">Reels</span>
+            </div>
+          </div>
+          <div class="page-status">
+            <label class="status-toggle">
+              <input
+                type="checkbox"
+                [checked]="account.isActive"
+                [disabled]="isUpdatingInstagramStatus(account.id) || !isInstagramActivationAllowed(account)"
+                [attr.title]="getInstagramActivationGateReason(account) || null"
+                (change)="updateInstagramAccountStatus(account, $any($event.target).checked)"
+                class="toggle-input">
+              <span class="toggle-slider" [class.updating]="isUpdatingInstagramStatus(account.id)"></span>
+              <span class="status-label">
+                {{ isUpdatingInstagramStatus(account.id) ? 'Actualizando...' : (account.isActive ? 'Activa' : 'Inactiva') }}
+              </span>
+            </label>
+            <div class="page-card-secondary-actions compact" *ngIf="!account.isActive && !isAccountDisconnectedRevoked(account)">
+              <button
+                type="button"
+                class="btn-link-secondary"
+                (click)="hideAccountFromList(account)"
+                [disabled]="isAccountActionInProgress(account.id)">
+                {{ isHidingAccount(account.id) ? 'Ocultando...' : 'Ocultar' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+  </ng-template>
+
   <div class="pages-section">
-    <h2>Páginas Conectadas</h2>
-    
+    <div class="pages-section-header">
+      <h2>Páginas de Facebook</h2>
+      <p class="section-status" *ngIf="hasFacebookOAuthConnections()">
+        <span class="meta-accounts-primary">{{ getConnectionActiveLabel(facebookConnectionStatus, 'page') }}</span><span class="meta-accounts-secondary" *ngIf="getConnectionInactiveLabel(facebookConnectionStatus) as inactive"> · {{ inactive }}</span>
+      </p>
+    </div>
     <div *ngIf="loading" class="loading-state">
       <div class="spinner"></div>
       <p>Cargando páginas...</p>
@@ -34,7 +423,7 @@
       <button (click)="loadConnectedPages()" class="retry-btn">Reintentar</button>
     </div>
 
-    <div *ngIf="!loading && !error && pages.length === 0" class="empty-state">
+    <div *ngIf="!loading && !error && pages.length === 0 && !hasFacebookOAuthConnections()" class="empty-state">
       <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>
       </svg>
@@ -42,8 +431,48 @@
       <p class="empty-subtitle">Conecta tu cuenta de Facebook para ver tus páginas aquí</p>
     </div>
 
-    <div *ngIf="!loading && !error && pages.length > 0" class="pages-grid">
-      <div *ngFor="let page of pages" class="page-card" [class.inactive]="!page.isActive">
+    <div *ngIf="!loading && !error && facebookConnectedPages.length === 0 && hasFacebookOAuthConnections()" class="empty-state">
+      <p *ngIf="facebookUnlinkedPages.length > 0">No hay páginas conectadas con permisos vigentes</p>
+      <p *ngIf="facebookUnlinkedPages.length === 0">{{ getConnectionActiveLabel(facebookConnectionStatus, 'page') || 'Sin páginas conectadas' }}</p>
+      <p class="empty-subtitle" *ngIf="facebookUnlinkedPages.length > 0">
+        Las páginas desvinculadas (sin permisos en Meta) aparecen abajo. Reconéctalas para volver a usarlas.
+      </p>
+      <p class="empty-subtitle" *ngIf="facebookUnlinkedPages.length === 0 && getConnectionInactiveLabel(facebookConnectionStatus) as inactive">
+        {{ inactive }}. Pulsa «Sincronizar Meta» o reconecta Facebook para vincular páginas.
+      </p>
+      <p class="empty-subtitle" *ngIf="facebookUnlinkedPages.length === 0 && !getConnectionInactiveLabel(facebookConnectionStatus)">
+        Pulsa «Sincronizar Meta» o reconecta Facebook.
+      </p>
+      <button class="retry-btn" (click)="syncMetaAccounts()" [disabled]="syncingMeta" *ngIf="facebookUnlinkedPages.length === 0">Sincronizar ahora</button>
+    </div>
+
+    <p class="section-hint warn" *ngIf="!loading && !error && facebookUnlinkedPages.length > 0 && hasMetaAccountsNeedingTokenRefresh">
+      Hay páginas desvinculadas sin permisos en Meta. Reconéctalas; desactivarlas desde arriba no restaura el token.
+    </p>
+
+    <div *ngIf="!loading && !error && facebookConnectedPages.length > 0" class="pages-grid">
+      <ng-container *ngFor="let page of facebookConnectedPages">
+        <ng-container *ngTemplateOutlet="facebookPageCard; context: { page: page }"></ng-container>
+      </ng-container>
+    </div>
+
+    <div *ngIf="!loading && !error && facebookUnlinkedPages.length > 0" class="pages-disconnected">
+      <h3 class="pages-disconnected-title">Páginas desvinculadas</h3>
+      <p class="pages-disconnected-hint">Sin permisos en Meta. Reconéctalas para volver a publicar.</p>
+      <div class="pages-grid pages-grid-muted">
+        <ng-container *ngFor="let page of facebookUnlinkedPages">
+          <ng-container
+            *ngIf="getFacebookAccount(page) as account"
+            [ngTemplateOutlet]="unlinkedAccountCard"
+            [ngTemplateOutletContext]="{ account: account }">
+          </ng-container>
+        </ng-container>
+      </div>
+    </div>
+  </div>
+
+  <ng-template #facebookPageCard let-page="page">
+      <div class="page-card" [class.inactive]="!page.isActive">
         <div class="page-header">
           <div class="page-icon">
             <img 
@@ -63,6 +492,10 @@
           <div class="page-info">
             <h3>{{ page.name }}</h3>
             <p class="page-id">ID: {{ page.facebookPageId }}</p>
+            <p class="page-shared-badge" *ngIf="hasSharedPageBindings(page)">
+              Accesible desde {{ getSharedBindingsCount(page) }} cuentas Meta
+            </p>
+            <p class="page-hint warn" *ngIf="page.isActive && getPagePublishHint(page) as hint">{{ hint }}</p>
           </div>
           <div class="page-status">
             <label class="status-toggle">
@@ -75,14 +508,13 @@
                 class="toggle-input">
               <span class="toggle-slider" [class.updating]="isUpdatingStatus(page.facebookPageId)"></span>
               <span class="status-label">
-                {{ isUpdatingStatus(page.facebookPageId) ? 'Actualizando...' : (page.isActive ? 'Activa' : 'Inactiva') }}
+                {{ isUpdatingStatus(page.facebookPageId) ? 'Actualizando...' : (page.isActive ? 'Conectada' : 'Desconectada') }}
               </span>
             </label>
           </div>
         </div>
       </div>
-    </div>
-  </div>
+  </ng-template>
 
   <!-- Sección de Grupos de Facebook -->
   <div class="groups-section">

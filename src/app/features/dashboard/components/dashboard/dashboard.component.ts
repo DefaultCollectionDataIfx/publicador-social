@@ -55,11 +55,15 @@ export class DashboardComponent implements OnInit, OnDestroy {
   expandedMenuItems: Set<string> = new Set(); // Para trackear qué items están expandidos
   avatarUrlWithCache: string | null = null;
   private subscriptions = new Subscription();
+  private readonly iconHtmlCache = new Map<string, SafeHtml>();
 
   /** Entitlements del tenant actual (menú y redirecciones). */
   entitlements: TenantEntitlementsResponse['data'] | null = null;
 
-  /** Definición completa del menú; `visibleMenuItems` aplica el plan. */
+  /** Menú filtrado por plan; se recalcula solo cuando cambian los entitlements. */
+  visibleMenuItems: MenuItem[] = [];
+
+  /** Definición completa del menú. */
   private readonly allMenuItems: MenuItem[] = [
     {
       label: 'Dashboard',
@@ -113,7 +117,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     },
     {
       label: 'Cuentas conectadas',
-      route: '/dashboard/cuentas',
+      route: '/dashboard/cuentas-conectadas',
       featureKeys: ['network.facebook.pages', 'network.facebook.groups'],
       icon: `<svg class="menu-icon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24">
         <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 12h4m-2 2v-4M4 18v-1a3 3 0 0 1 3-3h4a3 3 0 0 1 3 3v1a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1Zm8-10a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>
@@ -160,6 +164,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
     }
   ];
 
+  readonly configIcon: SafeHtml;
+  readonly notificationIcon: SafeHtml;
+
   constructor(
     private authService: AuthService,
     private router: Router,
@@ -167,7 +174,21 @@ export class DashboardComponent implements OnInit, OnDestroy {
     private tenantService: TenantService,
     private tenantContext: TenantContextService,
     private tenantEntitlements: TenantEntitlementsService
-  ) {}
+  ) {
+    this.cacheMenuIcons();
+    this.configIcon = this.sanitizer.bypassSecurityTrustHtml(`
+      <svg class="menu-icon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24">
+        <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13v-2a1 1 0 0 0-1-1h-.757l-.707-1.707.535-.536a1 1 0 0 0 0-1.414l-1.414-1.414a1 1 0 0 0-1.414 0l-.536.535L14 4.757V4a1 1 0 0 0-1-1h-2a1 1 0 0 0-1 1v.757l-1.707.707-.536-.535a1 1 0 0 0-1.414 0L4.929 6.343a1 1 0 0 0 0 1.414l.536.536L4.757 10H4a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h.757l.707 1.707-.535.536a1 1 0 0 0 0 1.414l1.414 1.414a1 1 0 0 0 1.414 0l.536-.535 1.707.707V20a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-.757l1.707-.708.536.536a1 1 0 0 0 1.414 0l1.414-1.414a1 1 0 0 0 0-1.414l-.535-.536.707-1.707H20a1 1 0 0 0 1-1Z"/>
+        <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>
+      </svg>
+    `);
+    this.notificationIcon = this.sanitizer.bypassSecurityTrustHtml(`
+      <svg class="notification-icon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24">
+        <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5.464V3.099m0 2.365a5.338 5.338 0 0 1 5.133 5.368v1.8c0 2.386 1.867 2.982 1.867 4.175C19 17.4 19 18 18.462 18H5.538C5 18 5 17.4 5 16.807c0-1.193 1.867-1.789 1.867-4.175v-1.8A5.338 5.338 0 0 1 12 5.464ZM6 5 5 4M4 9H3m15-4 1-1m1 5h1M8.54 18a3.48 3.48 0 0 0 6.92 0H8.54Z"/>
+      </svg>
+    `);
+    this.rebuildVisibleMenuItems();
+  }
 
   /** Menú filtrado por `features` del plan actual. */
   /** Sin workspaces tras GET exitoso: pantalla para crear organización propia. */
@@ -190,11 +211,32 @@ export class DashboardComponent implements OnInit, OnDestroy {
     );
   }
 
-  get visibleMenuItems(): MenuItem[] {
+  private rebuildVisibleMenuItems(): void {
     const features = this.entitlements?.features;
-    return this.allMenuItems
+    this.visibleMenuItems = this.allMenuItems
       .map((item) => this.projectVisibleMenuItem(item, features))
       .filter((item): item is MenuItem => item !== null);
+  }
+
+  private cacheMenuIcons(): void {
+    for (const item of this.allMenuItems) {
+      if (item.icon) {
+        this.iconHtmlCache.set(item.icon, this.sanitizer.bypassSecurityTrustHtml(item.icon));
+      }
+      item.children?.forEach((child) => {
+        if (child.icon) {
+          this.iconHtmlCache.set(child.icon, this.sanitizer.bypassSecurityTrustHtml(child.icon));
+        }
+      });
+    }
+  }
+
+  trackByMenuLabel(_index: number, item: MenuItem): string {
+    return item.label;
+  }
+
+  trackByChildLabel(_index: number, child: MenuItem): string {
+    return child.label;
   }
 
   private projectVisibleMenuItem(
@@ -234,6 +276,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     const gates: { prefix: string; keys: string[] }[] = [
       { prefix: '/dashboard/programador', keys: ['module.scheduler'] },
       { prefix: '/dashboard/colecciones', keys: ['module.collections'] },
+      { prefix: '/dashboard/cuentas-conectadas', keys: ['network.facebook.pages', 'network.facebook.groups', 'network.instagram'] },
       { prefix: '/dashboard/cuentas', keys: ['network.facebook.pages', 'network.facebook.groups'] },
       { prefix: '/dashboard/mensajes', keys: ['module.inbox'] },
       { prefix: '/dashboard/analiticas', keys: ['network.facebook.pages', 'network.facebook.groups'] },
@@ -284,6 +327,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
     const entitlementsSubscription = this.tenantEntitlements.entitlements$.subscribe((e) => {
       this.entitlements = e;
+      this.rebuildVisibleMenuItems();
       this.maybeRedirectIfRouteBlocked();
     });
     this.subscriptions.add(entitlementsSubscription);
@@ -727,6 +771,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
     const oldAvatarUrl = this.user ? validateAvatarUrl((this.user as UserProfileData).avatarUrl) : null;
     const newAvatarUrl = validateAvatarUrl((currentUser as UserProfileData).avatarUrl);
+    const userChanged = JSON.stringify(this.user) !== JSON.stringify(currentUser);
+
+    if (!userChanged && !forceAvatarRefresh) {
+      return;
+    }
 
     this.user = currentUser;
 
@@ -741,23 +790,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   getIconHtml(icon: string | undefined): SafeHtml | null {
     if (!icon) return null;
-    return this.sanitizer.bypassSecurityTrustHtml(icon);
-  }
-
-  getNotificationIcon(): SafeHtml {
-    return this.sanitizer.bypassSecurityTrustHtml(`
-      <svg class="notification-icon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24">
-        <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5.464V3.099m0 2.365a5.338 5.338 0 0 1 5.133 5.368v1.8c0 2.386 1.867 2.982 1.867 4.175C19 17.4 19 18 18.462 18H5.538C5 18 5 17.4 5 16.807c0-1.193 1.867-1.789 1.867-4.175v-1.8A5.338 5.338 0 0 1 12 5.464ZM6 5 5 4M4 9H3m15-4 1-1m1 5h1M8.54 18a3.48 3.48 0 0 0 6.92 0H8.54Z"/>
-      </svg>
-    `);
-  }
-
-  getConfigIcon(): SafeHtml {
-    return this.sanitizer.bypassSecurityTrustHtml(`
-      <svg class="menu-icon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24">
-        <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13v-2a1 1 0 0 0-1-1h-.757l-.707-1.707.535-.536a1 1 0 0 0 0-1.414l-1.414-1.414a1 1 0 0 0-1.414 0l-.536.535L14 4.757V4a1 1 0 0 0-1-1h-2a1 1 0 0 0-1 1v.757l-1.707.707-.536-.535a1 1 0 0 0-1.414 0L4.929 6.343a1 1 0 0 0 0 1.414l.536.536L4.757 10H4a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h.757l.707 1.707-.535.536a1 1 0 0 0 0 1.414l1.414 1.414a1 1 0 0 0 1.414 0l.536-.535 1.707.707V20a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-.757l1.707-.708.536.536a1 1 0 0 0 1.414 0l1.414-1.414a1 1 0 0 0 0-1.414l-.535-.536.707-1.707H20a1 1 0 0 0 1-1Z"/>
-        <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>
-      </svg>
-    `);
+    return this.iconHtmlCache.get(icon) ?? null;
   }
 }

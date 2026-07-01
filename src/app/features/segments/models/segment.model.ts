@@ -147,6 +147,11 @@ export interface ArchiveSegmentRequest {
  * se omite automáticamente (no se duplica).
  */
 export interface AddItemsToSegmentRequest {
+  managedSocialAccountIds: number[];
+}
+
+/** @deprecated Use managedSocialAccountIds */
+export interface LegacyAddItemsToSegmentRequest {
   pageIds?: number[];
   groupIds?: number[];
 }
@@ -172,7 +177,7 @@ export interface AddItemsToSegmentApiResponse {
  * Request para reemplazar items de una colección
  */
 export interface ReplaceSegmentItemsRequest {
-  socialAssetIds: number[];
+  managedSocialAccountIds: number[];
 }
 
 /**

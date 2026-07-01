@@ -1,13 +1,6 @@
 <div class="success-container">
-  <div *ngIf="success" class="success-content">
-    <div class="success-icon">✓</div>
-    <h1>¡Conexión exitosa!</h1>
-    <p>Tu cuenta de Facebook se ha conectado correctamente.</p>
-    <p *ngIf="pagesImported > 0" class="pages-info">
-      Se importaron {{ pagesImported }} página(s) de Facebook.
-    </p>
-    <button (click)="goToDashboard()" class="btn-primary">
-      Ir al Dashboard
-    </button>
+  <div class="loading-state">
+    <div class="spinner"></div>
+    <p>Redirigiendo a Cuentas conectadas…</p>
   </div>
 </div>

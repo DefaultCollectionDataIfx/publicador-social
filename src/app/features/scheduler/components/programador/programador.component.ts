@@ -17,6 +17,7 @@ import { ScheduledPostCardComponent } from '../scheduled-post-card/scheduled-pos
 import { ModalComponent } from '../../../../shared/components/modal/modal.component';
 import { PostComposerComponent } from '../post-composer/post-composer.component';
 import { PostPlanDetailsComponent } from '../post-plan-details/post-plan-details.component';
+import { SocialService } from '../../../../core/services/social.service';
 
 @Component({
   selector: 'app-programador',
@@ -44,6 +45,7 @@ export class ProgramadorComponent implements OnInit, OnDestroy {
   showPlanDetailsModal = false;
   selectedDate?: string; // Fecha seleccionada desde el calendario (ISO string)
   selectedPlanId?: number; // ID del plan seleccionado para ver detalles
+  instagramQuotaRemaining: number | null = null;
   private subscriptions = new Subscription();
 
   calendarOptions: CalendarOptions = {
@@ -69,11 +71,26 @@ export class ProgramadorComponent implements OnInit, OnDestroy {
 
   constructor(
     private schedulerService: SchedulerService,
-    private postPlanService: PostPlanService
+    private postPlanService: PostPlanService,
+    private social: SocialService
   ) {}
 
   ngOnInit(): void {
     this.updateDateDisplay();
+    this.loadInstagramQuota();
+  }
+
+  private loadInstagramQuota(): void {
+    const sub = this.social.getProviderGroupStatus('meta').subscribe({
+      next: (status) => {
+        const remaining = status.minPublishingQuotaRemaining;
+        this.instagramQuotaRemaining = typeof remaining === 'number' ? remaining : null;
+      },
+      error: () => {
+        this.instagramQuotaRemaining = null;
+      }
+    });
+    this.subscriptions.add(sub);
   }
 
   ngOnDestroy(): void {

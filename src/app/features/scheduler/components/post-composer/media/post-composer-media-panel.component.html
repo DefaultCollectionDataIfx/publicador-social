@@ -48,7 +48,7 @@
           <button type="button" class="btn ghost" (click)="closePanel()">Cancelar</button>
           <button type="button" class="btn primary" [disabled]="!selectedDeviceFile || deviceUploading" (click)="useDeviceUpload()">
             <span *ngIf="deviceUploading" class="spinner-tiny"></span>
-            {{ deviceUploading ? 'Subiendo…' : 'Usar en la publicación' }}
+            {{ deviceUploading ? 'Subiendo…' : (multiSelect ? 'Añadir al carrusel' : 'Usar en la publicación') }}
           </button>
         </footer>
       </div>
@@ -60,12 +60,29 @@
         <p class="media-error" *ngIf="libraryError">{{ libraryError }}</p>
         <ul class="library-grid" *ngIf="!libraryLoading && libraryItems.length">
           <li *ngFor="let it of libraryItems" class="library-cell">
-            <button type="button" class="library-thumb-btn" (click)="useLibraryItem(it.id)">
+            <button
+              type="button"
+              class="library-thumb-btn"
+              [class.selected]="isLibraryItemSelected(it.id)"
+              (click)="useLibraryItem(it.id)">
               <img *ngIf="it.thumb" [src]="it.thumb" alt="" class="library-thumb" />
               <span class="library-name">{{ it.name }}</span>
             </button>
           </li>
         </ul>
+        <div *ngIf="multiSelect && pendingSelections.length" class="multi-pending">
+          <p class="media-hint">Seleccionados ({{ pendingSelections.length }}/{{ maxItems }})</p>
+          <ul class="pending-list">
+            <li *ngFor="let s of pendingSelections">
+              {{ s.name || s.mimeType }}
+              <button type="button" class="link-btn" (click)="removePendingSelection(s.composerMediaId)">Quitar</button>
+            </li>
+          </ul>
+        </div>
+        <footer class="media-panel-actions" *ngIf="multiSelect">
+          <button type="button" class="btn ghost" (click)="closePanel()">Cancelar</button>
+          <button type="button" class="btn primary" (click)="confirmMultiSelection()">Confirmar selección</button>
+        </footer>
         <p *ngIf="!libraryLoading && !libraryError && !libraryItems.length" class="media-muted">No hay elementos. Sube medios primero.</p>
       </div>
 

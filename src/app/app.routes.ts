@@ -25,8 +25,25 @@ export const routes: Routes = [
         loadComponent: () => import('./features/dashboard/components/dashboard-overview/dashboard-overview.component').then(m => m.DashboardOverviewComponent)
       },
       {
-        path: 'cuentas',
+        path: 'cuentas-conectadas',
         loadComponent: () => import('./features/dashboard/components/cuentas-conectadas/cuentas-conectadas.component').then(m => m.CuentasConectadasComponent)
+      },
+      {
+        path: 'cuentas-conectadas/facebook',
+        loadComponent: () => import('./features/dashboard/components/cuentas-conectadas/cuentas-conectadas.component').then(m => m.CuentasConectadasComponent)
+      },
+      {
+        path: 'cuentas-conectadas/facebook/select',
+        loadComponent: () => import('./features/dashboard/components/facebook-page-select/facebook-page-select.component').then(m => m.FacebookPageSelectComponent)
+      },
+      {
+        path: 'cuentas-conectadas/instagram',
+        loadComponent: () => import('./features/dashboard/components/cuentas-conectadas/cuentas-conectadas.component').then(m => m.CuentasConectadasComponent)
+      },
+      {
+        path: 'cuentas',
+        redirectTo: 'cuentas-conectadas',
+        pathMatch: 'full'
       },
       {
         path: 'programador',
@@ -80,7 +97,7 @@ export const routes: Routes = [
       },
       {
         path: 'integraciones',
-        redirectTo: 'cuentas',
+        redirectTo: 'cuentas-conectadas',
         pathMatch: 'full'
       }
     ]

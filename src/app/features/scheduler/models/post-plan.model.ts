@@ -1,14 +1,34 @@
 // Modelos para planes de publicación (PostPlan)
 
+import {
+  PlanMediaItem,
+  PostDestination,
+  ProviderOptionsInstagram,
+  ProviderOptionsLinkedIn,
+  PublishAttempt
+} from '../../social/models/social.model';
+
 export interface CreatePostPlanRequest {
-  scheduledAt: string; // ISO 8601 date string
+  scheduledAt: string;
   timezone: string;
   message: string;
   linkUrl?: string;
-  mediaId?: number;
   imageUrl?: string;
-  pageIds?: string[]; // Opcional, si no se envía usa todas las publicables
-  dedupeKey?: string; // Opcional, para validación de deduplicación
+  dedupeKey?: string;
+  destinations?: PostDestination[];
+  planMedia?: PlanMediaItem[];
+  providerOptions?: {
+    instagram?: ProviderOptionsInstagram;
+    linkedin?: ProviderOptionsLinkedIn;
+  };
+  /** @deprecated Use destinations + planMedia */
+  mediaId?: number;
+  /** @deprecated Use destinations */
+  pageIds?: string[];
+  /** @deprecated Use providerOptions.instagram */
+  instagramContentType?: string;
+  /** @deprecated Use providerOptions.instagram.publishAsReels */
+  instagramPublishAsReels?: boolean;
 }
 
 export interface CreatePostPlanResponse {
@@ -38,13 +58,20 @@ export enum PostTargetStatus {
 }
 
 export interface PostTarget {
-  facebookPageId: string;
+  postTargetId?: number;
+  facebookPageId?: string;
+  externalAccountId?: string;
+  managedSocialAccountId?: number;
+  provider?: string;
   name: string;
-  status: PostTargetStatus;
+  status: PostTargetStatus | string;
   lastError?: string;
+  errorCode?: string;
   attemptCount: number;
   lastAttemptAt?: string;
 }
+
+export type { PublishAttempt };
 
 export interface PostPlanDetails {
   id: number;
@@ -71,7 +98,6 @@ export interface PostPlanDetailsResponse {
   };
 }
 
-// Modelo para PostPlan en el calendario (PostPlanCalendarItemDto)
 export interface PostPlanTargetsSummary {
   total: number;
   pending: number;
@@ -84,10 +110,10 @@ export type PostPlanStatus = 'Pending' | 'Published' | 'Failed' | 'Partial' | 'C
 
 export interface PostPlanListItem {
   id: number;
-  scheduledAt: string; // ISO 8601 date string
+  scheduledAt: string;
   timezone: string;
   createdAt: string;
-  title: string; // Texto corto visible en el calendario
+  title: string;
   status: PostPlanStatus;
   targetsSummary: PostPlanTargetsSummary;
   hasLink: boolean;

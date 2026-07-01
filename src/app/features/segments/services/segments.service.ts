@@ -41,7 +41,6 @@ import {
 })
 export class SegmentsService {
   private readonly collectionsApiUrl = '/api/collections';
-  private readonly targetsApiUrl = '/api/targets';
 
   constructor(private http: HttpClient) {}
 
@@ -158,35 +157,22 @@ export class SegmentsService {
    * @returns Observable con el resultado de la operación (collectionId, added, skippedDuplicates)
    */
   addItemsToSegment(collectionId: number, request: AddItemsToSegmentRequest): Observable<AddItemsToSegmentResponse> {
-    // Validar y filtrar IDs de páginas (deben ser mayores que 0)
-    const validPageIds = (request.pageIds || []).filter(id => id > 0);
+    const validIds = (request.managedSocialAccountIds || []).filter((id) => id > 0);
 
-    // Validar y filtrar IDs de grupos (deben ser mayores que 0)
-    const validGroupIds = (request.groupIds || []).filter(id => id > 0);
-
-    // Verificar que al menos haya un ID válido
-    if (validPageIds.length === 0 && validGroupIds.length === 0) {
-      return throwError(() => new Error('Debe proporcionar al menos un ID de página o grupo válido (mayor que 0)'));
+    if (validIds.length === 0) {
+      return throwError(
+        () => new Error('Debe proporcionar al menos un managedSocialAccountId válido (mayor que 0)')
+      );
     }
 
-    // Construir el request con solo los IDs válidos
-    const validRequest: AddItemsToSegmentRequest = {};
-
-    if (validPageIds.length > 0) {
-      validRequest.pageIds = validPageIds;
-    }
-
-    if (validGroupIds.length > 0) {
-      validRequest.groupIds = validGroupIds;
-    }
-
-    return this.http.post<AddItemsToSegmentApiResponse>(
-      `${this.collectionsApiUrl}/${collectionId}/items`,
-      validRequest
-    ).pipe(
-      map(response => response.data),
-      catchError(this.handleError)
-    );
+    return this.http
+      .post<AddItemsToSegmentApiResponse>(`${this.collectionsApiUrl}/${collectionId}/items`, {
+        managedSocialAccountIds: validIds
+      })
+      .pipe(
+        map((response) => response.data),
+        catchError(this.handleError)
+      );
   }
 
   /**
@@ -210,40 +196,19 @@ export class SegmentsService {
    * @returns Observable que completa cuando la operación es exitosa
    */
   replaceSegmentItems(collectionId: number, request: ReplaceSegmentItemsRequest): Observable<void> {
-    return this.http.put<void>(
-      `${this.collectionsApiUrl}/${collectionId}/items`,
-      request
-    ).pipe(
-      catchError(this.handleError)
-    );
+    return this.http
+      .put<void>(`${this.collectionsApiUrl}/${collectionId}/items`, {
+        managedSocialAccountIds: request.managedSocialAccountIds
+      })
+      .pipe(catchError(this.handleError));
   }
 
-  /**
-   * Resuelve targets por colecciones
-   * Útil para Publicaciones/Programador cuando se selecciona "Publicar a Colección X"
-   * @param request IDs de las colecciones y opciones
-   * @returns Observable con los targets resueltos
-   */
-  resolveTargets(request: ResolveTargetsRequest): Observable<ResolveTargetsResponse> {
-    return this.http.post<ResolveTargetsResponse>(
-      `${this.targetsApiUrl}/resolve`,
-      request
-    ).pipe(
-      catchError(this.handleError)
-    );
-  }
-
-  /**
-   * Maneja errores HTTP de manera consistente
-   */
   private handleError = (error: HttpErrorResponse) => {
     let errorMessage = 'Error desconocido';
 
     if (error.error instanceof ErrorEvent) {
-      // Error del lado del cliente
       errorMessage = `Error: ${error.error.message}`;
     } else {
-      // Error del lado del servidor
       switch (error.status) {
         case 401:
           errorMessage = 'Tu sesión ha expirado. Por favor, inicia sesión nuevamente.';
@@ -255,13 +220,16 @@ export class SegmentsService {
           errorMessage = error.error?.detail || error.error?.message || 'Colección no encontrada.';
           break;
         case 500:
-          // Intentar obtener más detalles del error del servidor
-          const serverError = error.error?.detail || error.error?.message || error.error?.title;
-          errorMessage = serverError || 'Error del servidor. Por favor, intenta más tarde.';
+          errorMessage =
+            error.error?.detail ||
+            error.error?.message ||
+            error.error?.title ||
+            'Error del servidor. Por favor, intenta más tarde.';
           console.error('Error 500 del servidor:', error.error);
           break;
         default:
-          errorMessage = error.error?.detail || error.error?.message || `Error ${error.status}: ${error.message}`;
+          errorMessage =
+            error.error?.detail || error.error?.message || `Error ${error.status}: ${error.message}`;
       }
     }
 

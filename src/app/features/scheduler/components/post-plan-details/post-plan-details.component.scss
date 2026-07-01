@@ -321,6 +321,21 @@
     }
   }
 
+  .publish-progress {
+    margin-top: 12px;
+    padding: 12px;
+    background: #f8fafc;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+
+    .carousel-children {
+      margin: 8px 0 0;
+      padding-left: 18px;
+      font-size: 13px;
+      color: #475569;
+    }
+  }
+
   .targets-summary {
     display: flex;
     flex-wrap: wrap;

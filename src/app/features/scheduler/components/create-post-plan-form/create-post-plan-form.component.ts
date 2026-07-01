@@ -3,7 +3,10 @@ import { CommonModule } from '@angular/common';
 import { FormBuilder, FormGroup, Validators, ReactiveFormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
 import { PostPlanService } from '../../services/post-plan.service';
+import { CreatePostPlanRequest } from '../../models/post-plan.model';
 import { FacebookOAuthService } from '../../../../core/services/facebook-oauth.service';
+import { SocialService } from '../../../../core/services/social.service';
+import { SocialAccount } from '../../../social/models/social.model';
 import { TenantEntitlementsResponse } from '../../../../core/models/tenant.model';
 import { TenantEntitlementsService } from '../../../../core/services/tenant-entitlements.service';
 import { canUseLimit, getLimitValue, isFeatureEnabled } from '../../../../core/utils/entitlements.utils';
@@ -26,6 +29,7 @@ export class CreatePostPlanFormComponent implements OnInit, OnDestroy {
 
   postPlanForm!: FormGroup;
   pages: FacebookPage[] = [];
+  facebookAccounts: SocialAccount[] = [];
   loadingPages = true;
   isLoading = false;
   errorMessage = '';
@@ -53,6 +57,7 @@ export class CreatePostPlanFormComponent implements OnInit, OnDestroy {
     private fb: FormBuilder,
     private postPlanService: PostPlanService,
     private facebookService: FacebookOAuthService,
+    private social: SocialService,
     private tenantEntitlements: TenantEntitlementsService
   ) {}
 
@@ -103,13 +108,15 @@ export class CreatePostPlanFormComponent implements OnInit, OnDestroy {
 
   loadPages(): void {
     this.loadingPages = true;
-    const pagesSubscription = this.facebookService.getConnectedPages().subscribe({
-      next: (pages) => {
-        // Filtrar solo páginas que pueden publicar (isActive AND canPublish)
-        this.pages = pages.filter(page => page.isActive && page.canPublish);
-        this.loadingPages = false;
-        this.updatePostPlanGate();
-      },
+    const pagesSubscription = this.social
+      .getAccounts({ providerGroup: 'meta', provider: 'facebook', accountType: 'page', forPublishing: true })
+      .subscribe({
+        next: (accounts) => {
+          this.facebookAccounts = accounts.filter((a) => a.isActive && a.canPublish);
+          this.pages = this.facebookAccounts.map((a) => this.social.accountToFacebookPage(a));
+          this.loadingPages = false;
+          this.updatePostPlanGate();
+        },
       error: (error) => {
         console.error('Error al cargar páginas:', error);
         this.loadingPages = false;
@@ -236,13 +243,12 @@ export class CreatePostPlanFormComponent implements OnInit, OnDestroy {
     const scheduledAtISO = scheduledAtDate.toISOString();
 
     // Preparar request
-    const request: any = {
+    const request: CreatePostPlanRequest = {
       scheduledAt: scheduledAtISO,
       timezone: formValue.timezone,
       message: formValue.message.trim()
     };
 
-    // Agregar campos opcionales solo si tienen valor
     if (formValue.linkUrl?.trim()) {
       request.linkUrl = formValue.linkUrl.trim();
     }
@@ -252,10 +258,14 @@ export class CreatePostPlanFormComponent implements OnInit, OnDestroy {
     if (formValue.dedupeKey?.trim()) {
       request.dedupeKey = formValue.dedupeKey.trim();
     }
-    // Solo incluir pageIds si se seleccionaron páginas específicas
-    if (formValue.pageIds && formValue.pageIds.length > 0) {
-      request.pageIds = formValue.pageIds;
-    }
+
+    const selectedExternalIds: string[] =
+      formValue.pageIds?.length > 0
+        ? formValue.pageIds
+        : this.facebookAccounts.map((a) => a.externalAccountId);
+    request.destinations = this.facebookAccounts
+      .filter((a) => selectedExternalIds.includes(a.externalAccountId))
+      .map((a) => ({ managedSocialAccountId: a.id }));
 
     const createSubscription = this.postPlanService.createPostPlan(request).subscribe({
       next: (response) => {

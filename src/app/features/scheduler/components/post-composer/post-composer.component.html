@@ -4,6 +4,9 @@
     (openChange)="onMediaPanelOpenChange($event)"
     [initialTab]="mediaPanelInitialTab"
     [pendingFile]="mediaPanelPendingFile"
+    [multiSelect]="mediaPanelMultiSelect"
+    [maxItems]="10"
+    [selectedMediaIds]="selectedPlanMediaIds"
     (mediaApplied)="onMediaApplied($event)">
   </app-post-composer-media-panel>
   <!-- Stepper móvil -->
@@ -41,60 +44,104 @@
         <h3 class="col-title">Dónde publicar</h3>
         <p class="col-hint">Selecciona al menos una cuenta.</p>
 
-        <div *ngIf="loadingPages" class="state-box">
+        <div *ngIf="loadingPages && !isInstagramMode" class="state-box">
           <span class="spinner-tiny"></span>
           <span>Cargando páginas…</span>
         </div>
 
-        <div *ngIf="!loadingPages && pages.length === 0" class="state-box muted">
-          No hay páginas de Facebook listas para publicar.
+        <div *ngIf="loadingInstagram && isInstagramMode" class="state-box">
+          <span class="spinner-tiny"></span>
+          <span>Cargando cuentas Instagram…</span>
         </div>
 
-        <ng-container *ngIf="!loadingPages && pages.length > 0">
-          <div class="network-group">
-            <div class="network-label">Facebook</div>
-            <div class="accounts-actions">
-              <button type="button" class="link-btn" (click)="selectAllPages()">Seleccionar todo</button>
-              <span class="sep">·</span>
-              <button type="button" class="link-btn" (click)="deselectAllPages()">Ninguna</button>
-            </div>
-            <ul class="account-list">
-              <li *ngFor="let page of pages" class="account-row">
-                <label class="account-label">
-                  <input
-                    type="checkbox"
-                    [checked]="isPageSelected(page.facebookPageId)"
-                    (change)="togglePageSelection(page.facebookPageId)" />
-                  <span class="avatar-wrap">
-                    <img
-                      *ngIf="page.pictureUrl"
-                      [src]="page.pictureUrl"
-                      [alt]="''"
-                      width="36"
-                      height="36"
-                      class="avatar" />
-                    <span *ngIf="!page.pictureUrl" class="avatar avatar-fallback">{{ page.name.charAt(0) }}</span>
-                  </span>
-                  <span class="account-meta">
-                    <span class="account-name">{{ page.name }}</span>
-                    <span class="account-status ok">Conectado</span>
-                  </span>
-                </label>
-              </li>
-            </ul>
+        <ng-container *ngIf="!isInstagramMode">
+          <div *ngIf="!loadingPages && pages.length === 0" class="state-box muted">
+            No hay páginas de Facebook listas para publicar.
           </div>
 
-          <div class="network-group disabled-network">
-            <div class="network-label">Instagram</div>
-            <p class="soon-label">Próximamente</p>
-          </div>
-          <div class="network-group disabled-network">
-            <div class="network-label">LinkedIn</div>
-            <p class="soon-label">Próximamente</p>
-          </div>
+          <ng-container *ngIf="!loadingPages && pages.length > 0">
+            <div class="network-group">
+              <div class="network-label">Facebook</div>
+              <div class="accounts-actions">
+                <button type="button" class="link-btn" (click)="selectAllPages()">Seleccionar todo</button>
+                <span class="sep">·</span>
+                <button type="button" class="link-btn" (click)="deselectAllPages()">Ninguna</button>
+              </div>
+              <ul class="account-list">
+                <li *ngFor="let page of pages" class="account-row">
+                  <label class="account-label">
+                    <input
+                      type="checkbox"
+                      [checked]="isPageSelected(page.facebookPageId)"
+                      (change)="togglePageSelection(page.facebookPageId)" />
+                    <span class="avatar-wrap">
+                      <img
+                        *ngIf="page.pictureUrl"
+                        [src]="page.pictureUrl"
+                        [alt]="''"
+                        width="36"
+                        height="36"
+                        class="avatar" />
+                      <span *ngIf="!page.pictureUrl" class="avatar avatar-fallback">{{ page.name.charAt(0) }}</span>
+                    </span>
+                    <span class="account-meta">
+                      <span class="account-name">{{ page.name }}</span>
+                      <span class="account-status ok">Conectado</span>
+                    </span>
+                  </label>
+                </li>
+              </ul>
+            </div>
+          </ng-container>
         </ng-container>
 
-        <p class="field-error" *ngIf="pagesSelectionError()">Selecciona al menos una cuenta.</p>
+        <ng-container *ngIf="isInstagramMode">
+          <div *ngIf="!loadingInstagram && instagramAccounts.length === 0" class="state-box muted">
+            No hay cuentas Instagram listas. Conéctalas en Cuentas conectadas.
+          </div>
+          <ng-container *ngIf="!loadingInstagram && instagramAccounts.length > 0">
+            <div class="network-group">
+              <div class="network-label">Instagram</div>
+              <div class="accounts-actions">
+                <button type="button" class="link-btn" (click)="selectAllInstagramAccounts()">Seleccionar todo</button>
+                <span class="sep">·</span>
+                <button type="button" class="link-btn" (click)="deselectAllInstagramAccounts()">Ninguna</button>
+              </div>
+              <ul class="account-list">
+                <li *ngFor="let account of instagramAccounts" class="account-row">
+                  <label class="account-label" [class.disabled]="isInstagramAccountDisabled(account)">
+                    <input
+                      type="checkbox"
+                      [checked]="isInstagramAccountSelected(account.id)"
+                      [disabled]="isInstagramAccountDisabled(account)"
+                      (change)="toggleInstagramAccount(account.id)" />
+                    <span class="avatar-wrap">
+                      <img *ngIf="account.pictureUrl" [src]="account.pictureUrl" alt="" width="36" height="36" class="avatar" />
+                      <span *ngIf="!account.pictureUrl" class="avatar avatar-fallback">{{ account.displayName.charAt(0) }}</span>
+                    </span>
+                    <span class="account-meta">
+                      <span class="account-name">{{ account.displayName }}</span>
+                      <span class="account-status" [class.ok]="!isInstagramAccountDisabled(account)">
+                        {{ getInstagramQuotaLabel(account) || (account.requiresReconnect ? 'Reconectar' : 'Listo') }}
+                      </span>
+                    </span>
+                  </label>
+                </li>
+              </ul>
+            </div>
+          </ng-container>
+        </ng-container>
+
+        <div class="network-group disabled-network" *ngIf="!isInstagramMode">
+          <div class="network-label">Instagram</div>
+          <p class="soon-label">Cambia a la pestaña Instagram en vista previa para publicar</p>
+        </div>
+        <div class="network-group disabled-network">
+          <div class="network-label">LinkedIn</div>
+          <p class="soon-label">Próximamente</p>
+        </div>
+
+        <p class="field-error" *ngIf="accountsSelectionError()">Selecciona al menos una cuenta.</p>
       </aside>
 
       <!-- Columna central: editor -->
@@ -224,7 +271,22 @@
             </div>
           </div>
 
-          <details class="more-block">
+          <div class="plan-media-list" *ngIf="isInstagramMode && planMediaItems.length">
+            <p class="mini-label">Medios seleccionados ({{ planMediaItems.length }})</p>
+            <ul>
+              <li *ngFor="let m of planMediaItems">
+                {{ m.name || m.mimeType }}
+                <button type="button" class="link-btn" (click)="removePlanMediaItem(m.composerMediaId)">Quitar</button>
+              </li>
+            </ul>
+          </div>
+
+          <label class="reel-toggle" *ngIf="isInstagramMode && hasVideoInPlanMedia && planMediaItems.length === 1">
+            <input type="checkbox" [(ngModel)]="publishAsReel" [ngModelOptions]="{standalone: true}" />
+            Publicar como Reel
+          </label>
+
+          <details class="more-block" *ngIf="!isInstagramMode">
             <summary>Enlaces y opciones</summary>
             <div class="field-row">
               <label for="linkUrl" class="mini-label">URL del enlace (opcional)</label>
@@ -285,8 +347,23 @@
           </div>
         </div>
 
-        <div class="preview-placeholder" *ngIf="previewNetwork !== 'facebook'">
-          <p>Vista previa para {{ previewNetwork }} estará disponible cuando conectemos la red.</p>
+        <div class="preview-card preview-ig" *ngIf="previewNetwork === 'instagram'">
+          <div class="fb-header">
+            <span class="fb-avatar fb-avatar-ph ig">IG</span>
+            <div class="fb-head-text">
+              <span class="fb-name">{{ selectedInstagramAccounts[0]?.displayName || 'Cuenta Instagram' }}</span>
+              <span class="fb-meta">{{ publishMode === 'now' ? 'Ahora' : 'Programada' }}</span>
+            </div>
+          </div>
+          <p class="fb-body">{{ postPlanForm.get('message')?.value || 'Tu texto aparecerá aquí.' }}</p>
+          <div class="fb-image-wrap" *ngIf="previewImageSrc()">
+            <img [src]="previewImageSrc()!" alt="" class="fb-image" />
+          </div>
+          <p class="muted tiny" *ngIf="planMediaItems.length > 1">Carrusel: {{ planMediaItems.length }} elementos</p>
+        </div>
+
+        <div class="preview-placeholder" *ngIf="previewNetwork === 'linkedin'">
+          <p>Vista previa para LinkedIn estará disponible cuando conectemos la red.</p>
         </div>
       </aside>
     </div>

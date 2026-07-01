@@ -1,7 +1,10 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ActivatedRoute, Router } from '@angular/router';
+import { Router } from '@angular/router';
 
+/**
+ * @deprecated Redirige a Cuentas conectadas; el flujo OAuth actual usa popup Meta.
+ */
 @Component({
   selector: 'app-facebook-success',
   standalone: true,
@@ -10,22 +13,11 @@ import { ActivatedRoute, Router } from '@angular/router';
   styleUrl: './facebook-success.component.scss'
 })
 export class FacebookSuccessComponent implements OnInit {
-  success = false;
-  pagesImported = 0;
-
-  constructor(
-    private route: ActivatedRoute,
-    private router: Router
-  ) {}
+  constructor(private router: Router) {}
 
   ngOnInit(): void {
-    this.route.queryParams.subscribe(params => {
-      this.success = params['success'] === 'true';
-      this.pagesImported = parseInt(params['pagesImported'] || '0', 10);
+    this.router.navigate(['/dashboard/cuentas-conectadas'], {
+      queryParams: { metaOAuth: 'legacy-success' }
     });
-  }
-
-  goToDashboard(): void {
-    this.router.navigate(['/dashboard/cuentas']);
   }
 }
