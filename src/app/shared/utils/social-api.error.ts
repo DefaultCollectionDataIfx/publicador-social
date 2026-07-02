@@ -13,7 +13,10 @@ export type SocialConnectionErrorCode =
   | 'SOCIAL_CONNECTION_NOT_FOUND'
   | 'SOCIAL_CONNECTION_REAUTH_REQUIRED'
   | 'SOCIAL_IG_ACCOUNT_LIMIT_REACHED'
-  | 'SOCIAL_CONNECTION_REAUTH_USER_MISMATCH';
+  | 'SOCIAL_THREADS_ACCOUNT_LIMIT_REACHED'
+  | 'SOCIAL_CONNECTION_REAUTH_USER_MISMATCH'
+  | 'LINKEDIN_ORGANIZATION_LIMIT_REACHED'
+  | 'LINKEDIN_NO_ADMIN_ORGANIZATIONS';
 
 export type SocialAccountConnectErrorCode =
   | 'SOCIAL_ACCOUNT_LIMIT_REACHED'
@@ -103,6 +106,68 @@ export function getSocialInstagramConnectionErrorMessage(
     return max != null
       ? `Has alcanzado el límite de cuentas Instagram activas (máx. ${max}).`
       : getSocialConnectionErrorMessage(code);
+  }
+  return getSocialConnectionErrorMessage(code, status?.maxConnectionsPerTenant);
+}
+
+export function getSocialThreadsConnectionErrorMessage(
+  code?: string,
+  status?: Pick<
+    SocialConnectionTypeStatus,
+    'maxConnectionsPerTenant' | 'maxThreadsAccounts'
+  >
+): string {
+  if (code === 'SOCIAL_CONNECTION_LIMIT_REACHED') {
+    const max = status?.maxConnectionsPerTenant;
+    return max != null
+      ? `Has alcanzado el límite de conexiones Threads (máx. ${max}).`
+      : 'Has alcanzado el límite de conexiones Threads.';
+  }
+  if (code === 'SOCIAL_THREADS_ACCOUNT_LIMIT_REACHED') {
+    const max = status?.maxThreadsAccounts;
+    return max != null
+      ? `Has alcanzado el límite de perfiles Threads activos (máx. ${max}).`
+      : 'Has alcanzado el límite de perfiles Threads activos.';
+  }
+  if (code === 'SOCIAL_CONNECTION_REAUTH_USER_MISMATCH') {
+    return 'Iniciaste sesión con otra cuenta de Threads. Usa la cuenta correcta o cancela.';
+  }
+  return getSocialConnectionErrorMessage(code, status?.maxConnectionsPerTenant);
+}
+
+export function getSocialLinkedInConnectionErrorMessage(
+  code?: string,
+  status?: Pick<
+    SocialConnectionTypeStatus,
+    'maxConnectionsPerTenant' | 'maxLinkedInOrganizations'
+  >
+): string {
+  if (code === 'SOCIAL_CONNECTION_LIMIT_REACHED') {
+    const max = status?.maxConnectionsPerTenant;
+    return max != null
+      ? `Has alcanzado el límite de miembros LinkedIn conectados (máx. ${max}).`
+      : 'Has alcanzado el límite de miembros LinkedIn conectados.';
+  }
+  if (code === 'LINKEDIN_ORGANIZATION_LIMIT_REACHED') {
+    const max = status?.maxLinkedInOrganizations;
+    return max != null
+      ? `Algunas organizaciones no se importaron por límite del plan (máx. ${max}).`
+      : 'Algunas organizaciones no se importaron por límite del plan.';
+  }
+  if (code === 'LINKEDIN_NO_ADMIN_ORGANIZATIONS') {
+    return 'Este miembro no administra organizaciones en LinkedIn.';
+  }
+  if (code === 'SOCIAL_CONNECTION_REAUTH_USER_MISMATCH') {
+    return 'Debes iniciar sesión con la misma cuenta LinkedIn.';
+  }
+  if (code === 'LINKEDIN_AUTH_REVOKED') {
+    return 'La sesión de LinkedIn expiró. Vuelve a conectar.';
+  }
+  if (code === 'SOCIAL_ACCOUNT_LIMIT_REACHED') {
+    const max = status?.maxLinkedInOrganizations;
+    return max != null
+      ? `Has alcanzado el límite de páginas de empresa LinkedIn (máx. ${max}).`
+      : 'Has alcanzado el límite de páginas de empresa LinkedIn.';
   }
   return getSocialConnectionErrorMessage(code, status?.maxConnectionsPerTenant);
 }

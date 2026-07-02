@@ -529,6 +529,18 @@
   color: #1877f2;
 }
 
+.page-type-badge {
+  margin: 4px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #0a66c2;
+}
+
+.btn-link-danger.compact {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
 .btn-link-danger {
   background: none;
   border: none;
@@ -566,12 +578,44 @@
   color: #e1306c;
 }
 
+.platform-info .platform-icon.threads {
+  color: #000000;
+}
+
 .instagram-card {
   margin-top: 0;
 }
 
+.threads-card {
+  margin-top: 0;
+}
+
+.linkedin-card {
+  margin-top: 0;
+}
+
+.platform-info .platform-icon.linkedin {
+  color: #0a66c2;
+}
+
+.linkedin-section {
+  margin-bottom: 40px;
+}
+
+.avatar-placeholder.linkedin {
+  background: #0a66c2;
+}
+
 .instagram-section {
   margin-bottom: 40px;
+}
+
+.threads-section {
+  margin-bottom: 40px;
+}
+
+.avatar-placeholder.threads {
+  background: #000000;
 }
 
 .avatar-placeholder {

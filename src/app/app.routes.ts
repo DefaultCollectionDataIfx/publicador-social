@@ -41,6 +41,18 @@ export const routes: Routes = [
         loadComponent: () => import('./features/dashboard/components/cuentas-conectadas/cuentas-conectadas.component').then(m => m.CuentasConectadasComponent)
       },
       {
+        path: 'cuentas-conectadas/threads',
+        loadComponent: () => import('./features/dashboard/components/cuentas-conectadas/cuentas-conectadas.component').then(m => m.CuentasConectadasComponent)
+      },
+      {
+        path: 'cuentas-conectadas/linkedin/select',
+        loadComponent: () => import('./features/dashboard/components/linkedin-account-select/linkedin-account-select.component').then(m => m.LinkedInAccountSelectComponent)
+      },
+      {
+        path: 'cuentas-conectadas/linkedin',
+        loadComponent: () => import('./features/dashboard/components/cuentas-conectadas/cuentas-conectadas.component').then(m => m.CuentasConectadasComponent)
+      },
+      {
         path: 'cuentas',
         redirectTo: 'cuentas-conectadas',
         pathMatch: 'full'

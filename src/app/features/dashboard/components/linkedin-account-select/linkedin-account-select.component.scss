@@ -1,0 +1,28 @@
+@import '../facebook-page-select/facebook-page-select.component.scss';
+
+.spinner.linkedin {
+  border-top-color: #0a66c2;
+}
+
+.avatar-placeholder.linkedin {
+  background: #0a66c2;
+  color: #fff;
+}
+
+.page-badge.type {
+  background: #e8f4fc;
+  color: #0a66c2;
+}
+
+.btn-primary.linkedin {
+  background: #0a66c2;
+
+  &:disabled {
+    opacity: 0.55;
+  }
+}
+
+.btn-connect-one {
+  border-color: #0a66c2;
+  color: #0a66c2;
+}

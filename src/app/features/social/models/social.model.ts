@@ -1,6 +1,6 @@
 export type SocialProviderGroup = 'meta' | 'linkedin' | 'google' | 'tiktok' | 'x' | 'pinterest';
-export type SocialConnectionType = 'facebook_login' | 'instagram_login' | 'linkedin_oauth';
-export type SocialProvider = 'facebook' | 'instagram' | 'linkedin';
+export type SocialConnectionType = 'facebook_login' | 'instagram_login' | 'threads_login' | 'linkedin_oauth';
+export type SocialProvider = 'facebook' | 'instagram' | 'threads' | 'linkedin';
 export type InstagramContentType = 'image' | 'carousel' | 'video' | 'reel' | 'reels';
 export type PlanMediaRole = 'primary' | 'carousel_item' | 'cover';
 
@@ -19,6 +19,11 @@ export interface SocialCallbackResponse {
   errors: number;
   warningCode?: string | null;
   message?: string;
+  organizationErrors?: Array<{
+    organizationId: string;
+    errorCode: string;
+    message?: string;
+  }>;
 }
 
 export type SocialWorkspaceAccountStatus = 'Discovered' | 'Connected' | 'Disabled' | 'Revoked';
@@ -81,6 +86,14 @@ export interface SocialConnectionTypeStatus {
   maxInstagramAccounts?: number;
   activeInstagramAccounts?: number;
   remainingInstagramAccounts?: number;
+  /** Límite comercial de organizaciones LinkedIn activas. */
+  maxLinkedInOrganizations?: number;
+  activeLinkedInOrganizations?: number;
+  remainingLinkedInOrganizations?: number;
+  /** Límite comercial de perfiles Threads activos. */
+  maxThreadsAccounts?: number;
+  activeThreadsAccounts?: number;
+  remainingThreadsAccounts?: number;
 }
 
 export interface SocialConnection {
@@ -97,6 +110,8 @@ export interface SocialConnection {
   lastSyncStatus?: string;
   lastSyncError?: string;
   activeAccountCount: number;
+  /** Cuentas importadas pendientes de conectar en selector. */
+  discoveredAccountCount?: number;
   totalAccountCount: number;
   availableAccountCount?: number;
   requiresReconnect?: boolean;
@@ -104,7 +119,8 @@ export interface SocialConnection {
 
 export interface SocialConnectionAccountsResponse {
   connection: SocialConnection;
-  remainingSlots: number;
+  /** Cupo restante de organizaciones (null = ilimitado; perfil no consume slot). */
+  remainingSlots: number | null;
   maxSlots: number;
   activeSlotsUsed: number;
   accounts: SocialSelectorAccount[];

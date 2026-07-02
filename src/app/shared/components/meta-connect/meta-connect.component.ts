@@ -6,6 +6,7 @@ import { SocialConnectionType } from '../../../features/social/models/social.mod
 import {
   getSocialConnectionErrorMessage,
   getSocialInstagramConnectionErrorMessage,
+  getSocialThreadsConnectionErrorMessage,
   isSocialApiError
 } from '../../../shared/utils/social-api.error';
 
@@ -25,6 +26,7 @@ export class MetaConnectComponent {
   @Input() connectionId?: number;
   @Input() maxConnectionsPerTenant?: number;
   @Input() maxInstagramAccounts?: number;
+  @Input() maxThreadsAccounts?: number;
 
   @Output() connectionSuccess = new EventEmitter<SocialConnectionType>();
   @Output() connectionError = new EventEmitter<string>();
@@ -36,6 +38,10 @@ export class MetaConnectComponent {
 
   get isInstagram(): boolean {
     return this.connectionType === 'instagram_login';
+  }
+
+  get isThreads(): boolean {
+    return this.connectionType === 'threads_login';
   }
 
   get usesRedirect(): boolean {
@@ -53,12 +59,7 @@ export class MetaConnectComponent {
     const options = this.buildConnectOptions();
 
     if (this.usesRedirect) {
-      const redirect$ =
-        this.connectionType === 'instagram_login'
-          ? this.metaConnect.connectInstagramWithRedirect(options)
-          : this.metaConnect.connectFacebookWithRedirect(options);
-
-      redirect$.subscribe({
+      this.getRedirectFlow(options).subscribe({
         error: (err: unknown) => {
           this.loading = false;
           const msg = this.resolveErrorMessage(err);
@@ -69,12 +70,7 @@ export class MetaConnectComponent {
       return;
     }
 
-    const flow$ =
-      this.connectionType === 'instagram_login'
-        ? this.metaConnect.connectInstagramWithPopup(options)
-        : this.metaConnect.connectFacebookWithPopup(options);
-
-    flow$.subscribe({
+    this.getPopupFlow(options).subscribe({
       next: (result) => {
         this.loading = false;
         if (result.success) {
@@ -94,6 +90,26 @@ export class MetaConnectComponent {
     });
   }
 
+  private getRedirectFlow(options: ReturnType<MetaConnectComponent['buildConnectOptions']>) {
+    if (this.connectionType === 'instagram_login') {
+      return this.metaConnect.connectInstagramWithRedirect(options);
+    }
+    if (this.connectionType === 'threads_login') {
+      return this.metaConnect.connectThreadsWithRedirect(options);
+    }
+    return this.metaConnect.connectFacebookWithRedirect(options);
+  }
+
+  private getPopupFlow(options: ReturnType<MetaConnectComponent['buildConnectOptions']>) {
+    if (this.connectionType === 'instagram_login') {
+      return this.metaConnect.connectInstagramWithPopup(options);
+    }
+    if (this.connectionType === 'threads_login') {
+      return this.metaConnect.connectThreadsWithPopup(options);
+    }
+    return this.metaConnect.connectFacebookWithPopup(options);
+  }
+
   private buildConnectOptions() {
     if (this.oauthMode || this.connectionId != null) {
       return {
@@ -110,6 +126,12 @@ export class MetaConnectComponent {
         return getSocialInstagramConnectionErrorMessage(err.code, {
           maxConnectionsPerTenant: this.maxConnectionsPerTenant,
           maxInstagramAccounts: this.maxInstagramAccounts
+        });
+      }
+      if (this.isThreads) {
+        return getSocialThreadsConnectionErrorMessage(err.code, {
+          maxConnectionsPerTenant: this.maxConnectionsPerTenant,
+          maxThreadsAccounts: this.maxThreadsAccounts
         });
       }
       const connectionMsg = getSocialConnectionErrorMessage(err.code, this.maxConnectionsPerTenant);

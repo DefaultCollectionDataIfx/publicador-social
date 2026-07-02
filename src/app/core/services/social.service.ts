@@ -59,6 +59,18 @@ export interface InstagramIntegrationBundle {
   accounts: SocialAccount[];
 }
 
+export interface LinkedInIntegrationBundle {
+  status: SocialConnectionTypeStatus;
+  connections: SocialConnection[];
+  organizations: SocialAccount[];
+}
+
+export interface ThreadsIntegrationBundle {
+  status: SocialConnectionTypeStatus;
+  connections: SocialConnection[];
+  accounts: SocialAccount[];
+}
+
 export interface PollPublishAttemptsOptions {
   intervalMs?: number;
   timeoutMs?: number;
@@ -119,6 +131,26 @@ export class SocialService {
   /** OAuth Instagram: redirección completa (callback 302 a /cuentas-conectadas/instagram). */
   startInstagramConnectRedirect(options?: SocialConnectStartOptions): Observable<never> {
     return this.startConnect('meta', 'instagram_login', options).pipe(
+      map((url) => {
+        window.location.assign(url);
+        return undefined as never;
+      })
+    );
+  }
+
+  /** OAuth Threads: redirección completa (callback 302 a /cuentas-conectadas/threads). */
+  startThreadsConnectRedirect(options?: SocialConnectStartOptions): Observable<never> {
+    return this.startConnect('meta', 'threads_login', options).pipe(
+      map((url) => {
+        window.location.assign(url);
+        return undefined as never;
+      })
+    );
+  }
+
+  /** OAuth LinkedIn: redirección completa (callback 302 al selector post-OAuth). */
+  startLinkedInConnectRedirect(options?: SocialConnectStartOptions): Observable<never> {
+    return this.startConnect('linkedin', 'linkedin_oauth', options).pipe(
       map((url) => {
         window.location.assign(url);
         return undefined as never;
@@ -344,6 +376,35 @@ export class SocialService {
         isActive: true
       }),
       accounts: this.getAccounts({ providerGroup: 'meta', provider: 'instagram' })
+    });
+  }
+
+  refreshThreadsIntegrationBundle(): Observable<ThreadsIntegrationBundle> {
+    return forkJoin({
+      status: this.getConnectionTypeStatus('meta', 'threads_login'),
+      connections: this.getConnections({
+        providerGroup: 'meta',
+        connectionType: 'threads_login',
+        isActive: true
+      }),
+      accounts: this.getAccounts({ providerGroup: 'meta', provider: 'threads' })
+    });
+  }
+
+  refreshLinkedInIntegrationBundle(): Observable<LinkedInIntegrationBundle> {
+    return forkJoin({
+      status: this.getConnectionTypeStatus('linkedin', 'linkedin_oauth'),
+      connections: this.getConnections({
+        providerGroup: 'linkedin',
+        connectionType: 'linkedin_oauth',
+        isActive: true
+      }),
+      organizations: this.getAccounts({
+        providerGroup: 'linkedin',
+        provider: 'linkedin',
+        forPublishing: true,
+        includeBindings: true
+      })
     });
   }
 

@@ -33,6 +33,10 @@ export class MetaConnectService {
     return this.social.startConnect('meta', 'instagram_login', options);
   }
 
+  startThreadsConnect(options?: SocialConnectStartOptions): Observable<string> {
+    return this.social.startConnect('meta', 'threads_login', options);
+  }
+
   getStatus(): Observable<MetaStatus> {
     return this.social.getProviderGroupStatus('meta').pipe(
       map((group) => this.buildLegacyMetaStatus(group))
@@ -81,11 +85,23 @@ export class MetaConnectService {
     });
   }
 
+  getThreadsConnections(): Observable<SocialConnection[]> {
+    return this.social.getConnections({
+      providerGroup: 'meta',
+      connectionType: 'threads_login',
+      isActive: true
+    });
+  }
+
   syncFacebookConnection(connectionId: number): Observable<MetaSyncResponse> {
     return this.social.syncConnection(connectionId);
   }
 
   syncInstagramConnection(connectionId: number): Observable<MetaSyncResponse> {
+    return this.social.syncConnection(connectionId);
+  }
+
+  syncThreadsConnection(connectionId: number): Observable<MetaSyncResponse> {
     return this.social.syncConnection(connectionId);
   }
 
@@ -97,6 +113,10 @@ export class MetaConnectService {
     return this.social.disconnectConnection(connectionId);
   }
 
+  disconnectThreadsConnection(connectionId: number): Observable<MetaDisconnectResponse> {
+    return this.social.disconnectConnection(connectionId);
+  }
+
   connectFacebookWithRedirect(options?: SocialConnectStartOptions): Observable<never> {
     return this.social.startFacebookConnectRedirect(options);
   }
@@ -105,12 +125,20 @@ export class MetaConnectService {
     return this.social.startInstagramConnectRedirect(options);
   }
 
+  connectThreadsWithRedirect(options?: SocialConnectStartOptions): Observable<never> {
+    return this.social.startThreadsConnectRedirect(options);
+  }
+
   reauthFacebookConnection(connectionId: number): Observable<never> {
     return this.social.startFacebookConnectRedirect({ mode: 'reauth', connectionId });
   }
 
   reauthInstagramConnection(connectionId: number): Observable<never> {
     return this.social.startInstagramConnectRedirect({ mode: 'reauth', connectionId });
+  }
+
+  reauthThreadsConnection(connectionId: number): Observable<never> {
+    return this.social.startThreadsConnectRedirect({ mode: 'reauth', connectionId });
   }
 
   disconnect(connectionType: MetaConnectionType): Observable<MetaDisconnectResponse> {
@@ -143,6 +171,14 @@ export class MetaConnectService {
     return this.connectWithPopup(
       'instagram_login',
       this.startInstagramConnect(options),
+      options
+    );
+  }
+
+  connectThreadsWithPopup(options?: SocialConnectStartOptions): Observable<MetaOAuthResult> {
+    return this.connectWithPopup(
+      'threads_login',
+      this.startThreadsConnect(options),
       options
     );
   }

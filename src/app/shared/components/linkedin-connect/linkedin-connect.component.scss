@@ -1,9 +1,9 @@
-.meta-connect-btn {
+.linkedin-connect-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1.5rem;
-  background-color: #1877f2;
+  background-color: #0a66c2;
   color: white;
   border: none;
   border-radius: 6px;
@@ -11,14 +11,6 @@
   font-weight: 600;
   cursor: pointer;
   transition: background-color 0.2s, transform 0.1s;
-
-  &.instagram {
-    background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888);
-  }
-
-  &.threads {
-    background: #000000;
-  }
 
   &:hover:not(:disabled) {
     filter: brightness(1.05);

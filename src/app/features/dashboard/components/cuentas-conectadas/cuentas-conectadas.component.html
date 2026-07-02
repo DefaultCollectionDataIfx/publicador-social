@@ -1,7 +1,7 @@
 <div class="cuentas-container">
   <div class="header-section">
     <h1>Cuentas Conectadas</h1>
-    <p>Gestiona tus cuentas de Facebook e Instagram conectadas</p>
+    <p>Gestiona tus cuentas de Facebook, Instagram, LinkedIn y Threads conectadas</p>
   </div>
 
   <div class="meta-summary" *ngIf="metaGroupStatus || metaStatusLoading">
@@ -11,7 +11,7 @@
     </div>
     <div *ngIf="confirmingConnection" class="loading-state compact meta-confirming">
       <div class="spinner"></div>
-      <p>Confirmando conexión{{ confirmingConnection === 'facebook_login' ? ' de Facebook' : ' de Instagram' }}…</p>
+      <p>Confirmando conexión{{ confirmingConnection === 'facebook_login' ? ' de Facebook' : confirmingConnection === 'threads_login' ? ' de Threads' : ' de Instagram' }}…</p>
     </div>
 
     <div *ngIf="!metaStatusLoading && metaStatusError" class="error-state compact">
@@ -81,6 +81,26 @@
 
     <div class="meta-alert meta-alert-warn" *ngIf="igOAuthError">
       <strong>{{ igOAuthError }}</strong>
+    </div>
+
+    <div class="meta-alert" *ngIf="threadsOAuthToast">
+      <strong>{{ threadsOAuthToast }}</strong>
+    </div>
+
+    <div class="meta-alert meta-alert-warn" *ngIf="threadsOAuthError">
+      <strong>{{ threadsOAuthError }}</strong>
+    </div>
+
+    <div class="meta-alert" *ngIf="liOAuthToast">
+      <strong>{{ liOAuthToast }}</strong>
+    </div>
+
+    <div class="meta-alert meta-alert-warn" *ngIf="liOAuthError">
+      <strong>{{ liOAuthError }}</strong>
+    </div>
+
+    <div class="meta-alert meta-alert-warn" *ngIf="getLinkedInStatusWarning() as liWarning">
+      <strong>{{ liWarning }}</strong>
     </div>
 
     <div class="meta-alert" *ngIf="!metaStatusLoading && !hasMetaAccountsSyncPending && hasMetaAccountsPendingActivation">
@@ -268,6 +288,183 @@
         </ul>
       </div>
     </div>
+
+    <div class="connect-card threads-card" *ngIf="isThreadsFeatureEnabled()">
+      <div class="connect-header">
+        <div class="platform-info">
+          <svg class="platform-icon threads" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12.186 24h-.004c-3.381-.043-6.235-1.244-8.412-3.519C1.506 18.076.017 15.048 0 11.486V.483h4.354v11.003c.017 2.786.893 5.068 2.641 6.879 1.747 1.811 4.014 2.732 6.793 2.732 2.619 0 4.834-.858 6.587-2.554 1.753-1.696 2.636-3.812 2.652-6.348-.017-2.536-.899-4.653-2.652-6.349-1.753-1.696-3.968-2.553-6.587-2.553-1.077 0-2.085.126-3.024.378v4.443c.902-.3 1.864-.45 2.886-.45 1.644 0 3.027.563 4.146 1.688 1.12 1.126 1.684 2.574 1.696 4.343-.012 1.769-.576 3.217-1.696 4.343-1.119 1.125-2.502 1.688-4.146 1.688-1.021 0-1.984-.15-2.886-.45v4.443c.939.252 1.947.378 3.024.378 2.779 0 5.046-.921 6.793-2.732 1.748-1.811 2.624-4.093 2.641-6.879V.483H24v11.003c-.017 3.562-1.506 6.59-3.77 8.995-2.177 2.275-5.031 3.476-8.412 3.519h-.004z"/>
+          </svg>
+          <div>
+            <h2>Threads</h2>
+            <p>Conecta perfiles Threads (1 OAuth = 1 perfil)</p>
+            <p class="connect-meta-badge" *ngIf="hasThreadsOAuthConnections()">
+              {{ getThreadsConnectionsBadgeLabel() }} · {{ getThreadsAccountsBadgeLabel() }}
+            </p>
+          </div>
+        </div>
+        <div class="connect-actions">
+          <app-meta-connect
+            *ngIf="!hasThreadsOAuthConnections()"
+            connectionType="threads_login"
+            oauthMode="add"
+            [maxConnectionsPerTenant]="getMaxThreadsConnections()"
+            [maxThreadsAccounts]="getMaxThreadsAccounts()"
+            label="Conectar perfil Threads">
+          </app-meta-connect>
+          <app-meta-connect
+            *ngIf="hasThreadsOAuthConnections() && canAddThreadsConnection()"
+            connectionType="threads_login"
+            oauthMode="add"
+            [maxConnectionsPerTenant]="getMaxThreadsConnections()"
+            [maxThreadsAccounts]="getMaxThreadsAccounts()"
+            label="Conectar otro perfil">
+          </app-meta-connect>
+          <button
+            *ngIf="hasThreadsOAuthConnections()"
+            class="btn-link-danger"
+            (click)="disconnectMeta('threads_login')"
+            [disabled]="disconnectingMeta === 'threads_login'">
+            {{ disconnectingMeta === 'threads_login' ? 'Desconectando...' : 'Desconectar todos los perfiles Threads' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="meta-connections-panel" *ngIf="hasThreadsOAuthConnections() || loadingThreadsConnections">
+        <h3 class="meta-connections-title">Perfiles Threads autorizados</h3>
+        <div *ngIf="loadingThreadsConnections" class="loading-state compact">
+          <div class="spinner"></div>
+          <p>Cargando conexiones...</p>
+        </div>
+        <ul class="meta-connections-list" *ngIf="!loadingThreadsConnections && threadsConnections.length > 0">
+          <li class="meta-connection-row" *ngFor="let conn of threadsConnections">
+            <div class="meta-connection-avatar" *ngIf="conn.displayPictureUrl">
+              <img [src]="conn.displayPictureUrl" [alt]="formatConnectionLabel(conn)" />
+            </div>
+            <div class="meta-connection-info">
+              <span class="meta-connection-label">{{ formatConnectionLabel(conn) }}</span>
+              <span class="meta-connection-detail">
+                Token {{ getConnectionTokenLabel(conn) }}
+              </span>
+            </div>
+            <div class="meta-connection-actions">
+              <button
+                type="button"
+                class="btn-connection-action"
+                (click)="syncThreadsConnection(conn)"
+                [disabled]="isConnectionRowBusy(conn.id)">
+                {{ isSyncingConnection(conn.id) ? 'Sincronizando...' : 'Sincronizar' }}
+              </button>
+              <button
+                type="button"
+                class="btn-connection-action"
+                (click)="reauthThreadsConnection(conn)"
+                [disabled]="isConnectionRowBusy(conn.id)">
+                {{ isReauthingConnection(conn.id) ? 'Reautenticando...' : 'Reautenticar' }}
+              </button>
+              <button
+                type="button"
+                class="btn-connection-action btn-connection-danger"
+                (click)="disconnectThreadsConnection(conn)"
+                [disabled]="isConnectionRowBusy(conn.id)">
+                {{ isDisconnectingConnection(conn.id) ? 'Desconectando...' : 'Desconectar' }}
+              </button>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="connect-card linkedin-card" *ngIf="isLinkedInFeatureEnabled()">
+      <div class="connect-header">
+        <div class="platform-info">
+          <svg class="platform-icon linkedin" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+          </svg>
+          <div>
+            <h2>LinkedIn</h2>
+            <p>Conecta miembros LinkedIn (perfil + organizaciones vía selector post-OAuth)</p>
+            <p class="connect-meta-badge" *ngIf="hasLinkedInOAuthConnections()">
+              {{ getLinkedInConnectionsBadgeLabel() }} · {{ getLinkedInOrganizationsBadgeLabel() }}
+            </p>
+          </div>
+        </div>
+        <div class="connect-actions">
+          <app-linkedin-connect
+            *ngIf="!hasLinkedInOAuthConnections()"
+            oauthMode="add"
+            [maxConnectionsPerTenant]="getMaxLinkedInConnections()"
+            [maxLinkedInOrganizations]="getMaxLinkedInOrganizations()"
+            label="Conectar miembro LinkedIn">
+          </app-linkedin-connect>
+          <app-linkedin-connect
+            *ngIf="hasLinkedInOAuthConnections() && canAddLinkedInConnection()"
+            oauthMode="add"
+            [maxConnectionsPerTenant]="getMaxLinkedInConnections()"
+            [maxLinkedInOrganizations]="getMaxLinkedInOrganizations()"
+            label="Conectar otro miembro">
+          </app-linkedin-connect>
+          <button
+            *ngIf="hasLinkedInOAuthConnections()"
+            class="btn-link-danger"
+            (click)="disconnectLinkedIn()"
+            [disabled]="disconnectingLinkedIn">
+            {{ disconnectingLinkedIn ? 'Desconectando...' : 'Desconectar todos los miembros LinkedIn' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="meta-connections-panel" *ngIf="hasLinkedInOAuthConnections() || loadingLinkedInConnections">
+        <h3 class="meta-connections-title">Miembros LinkedIn autorizados</h3>
+        <div *ngIf="loadingLinkedInConnections" class="loading-state compact">
+          <div class="spinner"></div>
+          <p>Cargando conexiones...</p>
+        </div>
+        <ul class="meta-connections-list" *ngIf="!loadingLinkedInConnections && linkedinConnections.length > 0">
+          <li class="meta-connection-row" *ngFor="let conn of linkedinConnections">
+            <div class="meta-connection-avatar" *ngIf="conn.displayPictureUrl">
+              <img [src]="conn.displayPictureUrl" [alt]="formatConnectionLabel(conn)" />
+            </div>
+            <div class="meta-connection-info">
+              <span class="meta-connection-label">{{ formatConnectionLabel(conn) }}</span>
+              <span class="meta-connection-detail">
+                {{ getLinkedInConnectionStatsLabel(conn) }}
+              </span>
+            </div>
+            <div class="meta-connection-actions">
+              <button
+                type="button"
+                class="btn-connection-action"
+                (click)="openLinkedInAccountSelector(conn.id)"
+                [disabled]="isConnectionRowBusy(conn.id)">
+                Seleccionar cuentas
+              </button>
+              <button
+                type="button"
+                class="btn-connection-action"
+                (click)="syncLinkedInConnection(conn)"
+                [disabled]="isConnectionRowBusy(conn.id)">
+                {{ isSyncingConnection(conn.id) ? 'Sincronizando...' : 'Sincronizar' }}
+              </button>
+              <button
+                type="button"
+                class="btn-connection-action"
+                (click)="reauthLinkedInConnection(conn)"
+                [disabled]="isConnectionRowBusy(conn.id)">
+                {{ isReauthingConnection(conn.id) ? 'Reautenticando...' : 'Reautenticar' }}
+              </button>
+              <button
+                type="button"
+                class="btn-connection-action btn-connection-danger"
+                (click)="disconnectLinkedInConnection(conn)"
+                [disabled]="isConnectionRowBusy(conn.id)">
+                {{ isDisconnectingConnection(conn.id) ? 'Desconectando...' : 'Desconectar' }}
+              </button>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
   </div>
 
   <!-- Instagram accounts -->
@@ -307,6 +504,99 @@
       </div>
     </div>
   </div>
+
+  <!-- Threads accounts -->
+  <div class="pages-section threads-section" *ngIf="isThreadsFeatureEnabled()">
+    <h2>Cuentas Threads</h2>
+
+    <div *ngIf="loadingThreads" class="loading-state">
+      <div class="spinner"></div>
+      <p>Cargando cuentas Threads...</p>
+    </div>
+
+    <div *ngIf="!loadingThreads && threadsError" class="error-state">
+      <p>{{ threadsError }}</p>
+      <button (click)="loadThreadsAccounts()" class="retry-btn">Reintentar</button>
+    </div>
+
+    <div *ngIf="!loadingThreads && !threadsError && threadsAccounts.length === 0" class="empty-state">
+      <p>No hay cuentas Threads conectadas</p>
+      <p class="empty-subtitle">Conecta Threads para ver tus perfiles aquí</p>
+    </div>
+
+    <div *ngIf="!loadingThreads && !threadsError && threadsActiveAccounts.length > 0" class="pages-grid">
+      <ng-container *ngFor="let account of threadsActiveAccounts">
+        <ng-container *ngTemplateOutlet="threadsAccountCard; context: { account: account }"></ng-container>
+      </ng-container>
+    </div>
+
+    <div *ngIf="!loadingThreads && !threadsError && threadsInactiveAccounts.length > 0" class="pages-disconnected">
+      <h3 class="pages-disconnected-title">Cuentas desvinculadas</h3>
+      <p class="pages-disconnected-hint">Sin permisos en Meta. Reconéctalas para volver a publicar.</p>
+      <div class="pages-grid pages-grid-muted">
+        <ng-container *ngFor="let account of threadsInactiveAccounts">
+          <ng-container
+            *ngTemplateOutlet="isAccountDisconnectedRevoked(account) ? unlinkedAccountCard : threadsAccountCard; context: { account: account }">
+          </ng-container>
+        </ng-container>
+      </div>
+    </div>
+  </div>
+
+  <!-- LinkedIn publishable accounts -->
+  <div class="pages-section linkedin-section" *ngIf="isLinkedInFeatureEnabled()">
+    <h2>Cuentas LinkedIn publicables</h2>
+
+    <div *ngIf="loadingLinkedIn" class="loading-state">
+      <div class="spinner"></div>
+      <p>Cargando cuentas LinkedIn...</p>
+    </div>
+
+    <div *ngIf="!loadingLinkedIn && linkedinError" class="error-state">
+      <p>{{ linkedinError }}</p>
+      <button (click)="loadLinkedInOrganizations()" class="retry-btn">Reintentar</button>
+    </div>
+
+    <div *ngIf="!loadingLinkedIn && !linkedinError && linkedinPublishableAccounts.length === 0" class="empty-state">
+      <p>No hay cuentas LinkedIn conectadas al workspace</p>
+      <p class="empty-subtitle">Conecta un miembro y selecciona perfil u organizaciones en el selector post-OAuth</p>
+    </div>
+
+    <div *ngIf="!loadingLinkedIn && !linkedinError && linkedinPublishableAccounts.length > 0" class="pages-grid">
+      <ng-container *ngFor="let org of linkedinPublishableAccounts">
+        <ng-container *ngTemplateOutlet="linkedinOrgCard; context: { org: org }"></ng-container>
+      </ng-container>
+    </div>
+  </div>
+
+  <ng-template #linkedinOrgCard let-org="org">
+    <div class="page-card">
+      <div class="page-header">
+        <div class="page-icon">
+          <img *ngIf="org.pictureUrl" [src]="org.pictureUrl" [alt]="org.displayName" class="page-avatar">
+          <div *ngIf="!org.pictureUrl" class="avatar-placeholder linkedin">{{ getAccountInitial(org.displayName) }}</div>
+        </div>
+        <div class="page-info">
+          <h3>{{ org.displayName }}</h3>
+          <p class="page-id">ID: {{ org.externalAccountId || org.id }}</p>
+          <p class="page-type-badge">{{ getLinkedInAccountTypeLabel(org) }}</p>
+          <p class="page-shared-badge" *ngIf="hasSharedLinkedInBindings(org)">
+            Accesible desde {{ getSharedLinkedInBindingsCount(org) }} miembros: {{ getLinkedInBindingMemberLabels(org) }}
+          </p>
+          <p class="page-hint warn" *ngIf="!org.canPublish">No publicable: {{ org.requiresReconnect ? 'reconectar OAuth' : 'token inválido' }}</p>
+        </div>
+        <div class="page-status">
+          <button
+            type="button"
+            class="btn-link-danger compact"
+            (click)="disconnectLinkedInAccount(org)"
+            [disabled]="isDisconnectingLinkedInAccount(org.id)">
+            {{ isDisconnectingLinkedInAccount(org.id) ? 'Desconectando...' : 'Desconectar' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </ng-template>
 
   <ng-template #unlinkedAccountCard let-account="account">
     <div
@@ -390,6 +680,53 @@
               <span class="toggle-slider" [class.updating]="isUpdatingInstagramStatus(account.id)"></span>
               <span class="status-label">
                 {{ isUpdatingInstagramStatus(account.id) ? 'Actualizando...' : (account.isActive ? 'Activa' : 'Inactiva') }}
+              </span>
+            </label>
+            <div class="page-card-secondary-actions compact" *ngIf="!account.isActive && !isAccountDisconnectedRevoked(account)">
+              <button
+                type="button"
+                class="btn-link-secondary"
+                (click)="hideAccountFromList(account)"
+                [disabled]="isAccountActionInProgress(account.id)">
+                {{ isHidingAccount(account.id) ? 'Ocultando...' : 'Ocultar' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+  </ng-template>
+
+  <ng-template #threadsAccountCard let-account="account">
+      <div class="page-card" [class.inactive]="!account.isActive">
+        <div class="page-header">
+          <div class="page-icon">
+            <img *ngIf="account.pictureUrl" [src]="account.pictureUrl" [alt]="account.displayName" class="page-avatar">
+            <div *ngIf="!account.pictureUrl" class="avatar-placeholder threads">{{ getAccountInitial(account.displayName) }}</div>
+          </div>
+          <div class="page-info">
+            <h3>{{ account.displayName }}</h3>
+            <p class="page-id">ID: {{ account.id }}</p>
+            <p class="quota-text" *ngIf="account.publishingQuota">
+              Cupo: {{ account.publishingQuota.remaining }}/{{ account.publishingQuota.quotaTotal }}
+            </p>
+            <p class="page-hint warn" *ngIf="getThreadsPublishHint(account) as hint">{{ hint }}</p>
+            <div class="capabilities" *ngIf="account.capabilities">
+              <span class="cap-chip" *ngIf="account.capabilities.canPublishImage">Imagen</span>
+              <span class="cap-chip" *ngIf="account.capabilities.canPublishVideo">Video</span>
+            </div>
+          </div>
+          <div class="page-status">
+            <label class="status-toggle">
+              <input
+                type="checkbox"
+                [checked]="account.isActive"
+                [disabled]="isUpdatingThreadsStatus(account.id) || !isThreadsActivationAllowed(account)"
+                [attr.title]="getThreadsActivationGateReason(account) || null"
+                (change)="updateThreadsAccountStatus(account, $any($event.target).checked)"
+                class="toggle-input">
+              <span class="toggle-slider" [class.updating]="isUpdatingThreadsStatus(account.id)"></span>
+              <span class="status-label">
+                {{ isUpdatingThreadsStatus(account.id) ? 'Actualizando...' : (account.isActive ? 'Activa' : 'Inactiva') }}
               </span>
             </label>
             <div class="page-card-secondary-actions compact" *ngIf="!account.isActive && !isAccountDisconnectedRevoked(account)">

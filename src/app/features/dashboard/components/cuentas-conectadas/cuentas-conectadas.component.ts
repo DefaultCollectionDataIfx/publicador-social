@@ -4,18 +4,22 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
 import { FacebookOAuthService } from '../../../../core/services/facebook-oauth.service';
 import { MetaConnectService } from '../../../../core/services/meta-connect.service';
+import { LinkedInConnectService } from '../../../../core/services/linkedin-connect.service';
 import { SocialService, MetaIntegrationSnapshot } from '../../../../core/services/social.service';
 import {
   isSocialApiError,
   getSocialDeleteErrorMessage,
   getSocialConnectionErrorMessage,
   getSocialAccountConnectErrorMessage,
-  getSocialInstagramConnectionErrorMessage
+  getSocialInstagramConnectionErrorMessage,
+  getSocialThreadsConnectionErrorMessage,
+  getSocialLinkedInConnectionErrorMessage
 } from '../../../../shared/utils/social-api.error';
 import { TenantEntitlementsResponse } from '../../../../core/models/tenant.model';
 import { TenantEntitlementsService } from '../../../../core/services/tenant-entitlements.service';
 import { canUseLimit, getLimitValue, isFeatureEnabled } from '../../../../core/utils/entitlements.utils';
 import { MetaConnectComponent } from '../../../../shared/components/meta-connect/meta-connect.component';
+import { LinkedInConnectComponent } from '../../../../shared/components/linkedin-connect/linkedin-connect.component';
 import { FacebookGroupsService } from '../../../facebook/services/facebook-groups.service';
 import { FacebookPage, FacebookGroup } from '../../../facebook/models/facebook.model';
 import { MetaManagedAccount } from '../../../meta/models/meta.model';
@@ -31,7 +35,7 @@ import {
 @Component({
   selector: 'app-cuentas-conectadas',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, MetaConnectComponent],
+  imports: [CommonModule, FormsModule, RouterModule, MetaConnectComponent, LinkedInConnectComponent],
   templateUrl: './cuentas-conectadas.component.html',
   styleUrl: './cuentas-conectadas.component.scss'
 })
@@ -53,18 +57,23 @@ export class CuentasConectadasComponent implements OnInit {
   metaGroupStatus: SocialProviderGroupStatus | null = null;
   facebookConnectionStatus: SocialConnectionTypeStatus | null = null;
   instagramConnectionStatus: SocialConnectionTypeStatus | null = null;
+  threadsConnectionStatus: SocialConnectionTypeStatus | null = null;
   metaStatusLoading = false;
   metaStatusError: string | null = null;
   instagramAccounts: MetaManagedAccount[] = [];
   loadingInstagram = false;
   instagramError: string | null = null;
   updatingInstagramStatus: Set<number> = new Set();
+  threadsAccounts: MetaManagedAccount[] = [];
+  loadingThreads = false;
+  threadsError: string | null = null;
+  updatingThreadsStatus: Set<number> = new Set();
   reconnectingAccountIds: Set<number> = new Set();
   hidingAccountIds: Set<number> = new Set();
   deletingAccountIds: Set<number> = new Set();
   syncingMeta = false;
   confirmingConnection: SocialConnectionType | null = null;
-  disconnectingMeta: 'facebook_login' | 'instagram_login' | null = null;
+  disconnectingMeta: 'facebook_login' | 'instagram_login' | 'threads_login' | null = null;
   facebookConnections: SocialConnection[] = [];
   loadingFacebookConnections = false;
   syncingConnectionIds = new Set<number>();
@@ -77,8 +86,22 @@ export class CuentasConectadasComponent implements OnInit {
   pagesConnectedToast: string | null = null;
   igOAuthToast: string | null = null;
   igOAuthError: string | null = null;
+  threadsOAuthToast: string | null = null;
+  threadsOAuthError: string | null = null;
   instagramConnections: SocialConnection[] = [];
   loadingInstagramConnections = false;
+  threadsConnections: SocialConnection[] = [];
+  loadingThreadsConnections = false;
+  linkedinConnectionStatus: SocialConnectionTypeStatus | null = null;
+  linkedinConnections: SocialConnection[] = [];
+  linkedinOrganizations: SocialAccount[] = [];
+  loadingLinkedIn = false;
+  loadingLinkedInConnections = false;
+  linkedinError: string | null = null;
+  liOAuthToast: string | null = null;
+  liOAuthError: string | null = null;
+  disconnectingLinkedIn = false;
+  disconnectingLinkedInAccountIds: Set<number> = new Set();
 
   private facebookAccountByExternalId = new Map<string, SocialAccount>();
 
@@ -93,6 +116,7 @@ export class CuentasConectadasComponent implements OnInit {
   constructor(
     private facebookService: FacebookOAuthService,
     private metaConnect: MetaConnectService,
+    private linkedInConnect: LinkedInConnectService,
     private social: SocialService,
     private groupsService: FacebookGroupsService,
     private tenantEntitlements: TenantEntitlementsService,
@@ -113,18 +137,49 @@ export class CuentasConectadasComponent implements OnInit {
     this.loadMetaStatus();
     this.loadInstagramConnections();
     this.loadInstagramAccounts();
+    this.loadThreadsConnections();
+    this.loadThreadsAccounts();
+    this.loadLinkedInStatus();
+    this.loadLinkedInConnections();
+    this.loadLinkedInOrganizations();
     this.refreshEntitlements();
   }
 
-  /** Rutas alias (/facebook, /instagram) cargan la misma vista unificada en /cuentas-conectadas. */
+  /** Rutas alias cargan la misma vista unificada en /cuentas-conectadas. */
   private normalizeCanonicalRoute(): void {
     const path = this.router.url.split('?')[0];
-    if (
-      path.endsWith('/cuentas-conectadas/facebook') ||
-      path.endsWith('/cuentas-conectadas/instagram')
-    ) {
+    const queryParams = { ...this.route.snapshot.queryParams };
+
+    if (path.endsWith('/cuentas-conectadas/instagram')) {
+      queryParams['oauthPlatform'] = 'instagram';
       void this.router.navigate(['/dashboard/cuentas-conectadas'], {
-        queryParams: this.route.snapshot.queryParams,
+        queryParams,
+        replaceUrl: true
+      });
+      return;
+    }
+
+    if (path.endsWith('/cuentas-conectadas/threads')) {
+      queryParams['oauthPlatform'] = 'threads';
+      void this.router.navigate(['/dashboard/cuentas-conectadas'], {
+        queryParams,
+        replaceUrl: true
+      });
+      return;
+    }
+
+    if (path.endsWith('/cuentas-conectadas/linkedin') && !path.endsWith('/linkedin/select')) {
+      queryParams['oauthPlatform'] = 'linkedin';
+      void this.router.navigate(['/dashboard/cuentas-conectadas'], {
+        queryParams,
+        replaceUrl: true
+      });
+      return;
+    }
+
+    if (path.endsWith('/cuentas-conectadas/facebook')) {
+      void this.router.navigate(['/dashboard/cuentas-conectadas'], {
+        queryParams,
         replaceUrl: true
       });
     }
@@ -151,9 +206,63 @@ export class CuentasConectadasComponent implements OnInit {
       this.igOAuthError = null;
     }
 
+    const threadsError = params.get('threadsError');
+    if (threadsError) {
+      this.threadsOAuthError = getSocialThreadsConnectionErrorMessage(
+        threadsError,
+        this.threadsConnectionStatus ?? undefined
+      );
+    } else {
+      this.threadsOAuthError = null;
+    }
+
+    const liAccountsConnected = params.get('liAccountsConnected');
+    if (liAccountsConnected != null && liAccountsConnected !== '') {
+      const count = Number(liAccountsConnected);
+      if (Number.isFinite(count) && count > 0) {
+        this.liOAuthToast = `${count} cuenta${count === 1 ? '' : 's'} LinkedIn conectada${count === 1 ? '' : 's'} al workspace.`;
+      }
+    } else if (!params.get('connectionId')) {
+      this.liOAuthToast = null;
+    }
+
+    const liError = params.get('liError');
+    if (liError) {
+      this.liOAuthError = getSocialLinkedInConnectionErrorMessage(
+        liError,
+        this.linkedinConnectionStatus ?? undefined
+      );
+    } else {
+      this.liOAuthError = null;
+    }
+
     const connectionId = params.get('connectionId');
     const accountsImported = params.get('accountsImported');
-    if (connectionId && !accountsImported && !params.get('warning') && !params.get('fbError')) {
+    const oauthPlatform = params.get('oauthPlatform');
+
+    if (
+      connectionId &&
+      !accountsImported &&
+      !params.get('warning') &&
+      !params.get('fbError') &&
+      oauthPlatform === 'threads'
+    ) {
+      this.threadsOAuthToast = 'Perfil Threads conectado correctamente.';
+      this.refreshThreadsIntegration();
+      void this.router.navigate(['/dashboard/cuentas-conectadas'], {
+        queryParams: {},
+        replaceUrl: true
+      });
+      return;
+    }
+
+    if (
+      connectionId &&
+      !accountsImported &&
+      !params.get('warning') &&
+      !params.get('fbError') &&
+      oauthPlatform === 'instagram'
+    ) {
       this.igOAuthToast = 'Cliente Instagram conectado correctamente.';
       this.refreshInstagramIntegration();
       void this.router.navigate(['/dashboard/cuentas-conectadas'], {
@@ -469,6 +578,585 @@ export class CuentasConectadasComponent implements OnInit {
     });
   }
 
+  loadThreadsConnections(): void {
+    this.loadingThreadsConnections = true;
+    this.metaConnect.getThreadsConnections().subscribe({
+      next: (connections) => {
+        this.threadsConnections = connections;
+        this.loadingThreadsConnections = false;
+      },
+      error: () => {
+        this.threadsConnections = [];
+        this.loadingThreadsConnections = false;
+      }
+    });
+  }
+
+  refreshThreadsIntegration(): void {
+    this.social.refreshThreadsIntegrationBundle().subscribe({
+      next: (bundle) => {
+        this.threadsConnectionStatus = bundle.status;
+        this.threadsConnections = bundle.connections;
+        this.threadsAccounts = bundle.accounts as MetaManagedAccount[];
+        this.loadingThreads = false;
+        this.threadsError = null;
+        this.loadingThreadsConnections = false;
+      },
+      error: () => {
+        this.loadThreadsStatus();
+        this.loadThreadsConnections();
+        this.loadThreadsAccounts();
+      }
+    });
+  }
+
+  loadThreadsStatus(): void {
+    this.social.getConnectionTypeStatus('meta', 'threads_login').subscribe({
+      next: (s) => {
+        this.threadsConnectionStatus = s;
+        this.loadThreadsConnections();
+      },
+      error: () => (this.threadsConnectionStatus = null)
+    });
+  }
+
+  loadThreadsAccounts(): void {
+    this.loadingThreads = true;
+    this.threadsError = null;
+    this.metaConnect.getAccounts({ provider: 'threads' }).subscribe({
+      next: (accounts) => {
+        this.threadsAccounts = accounts;
+        this.loadingThreads = false;
+      },
+      error: (err: Error) => {
+        this.threadsError = err.message;
+        this.loadingThreads = false;
+      }
+    });
+  }
+
+  syncThreadsConnection(connection: SocialConnection): void {
+    if (this.syncingConnectionIds.has(connection.id)) return;
+    this.syncingConnectionIds.add(connection.id);
+    this.metaConnect.syncThreadsConnection(connection.id).subscribe({
+      next: () => {
+        this.syncingConnectionIds.delete(connection.id);
+        this.refreshThreadsIntegration();
+        this.refreshEntitlementsSilently();
+      },
+      error: (err: unknown) => {
+        this.syncingConnectionIds.delete(connection.id);
+        alert(this.resolveThreadsConnectionError(err));
+      }
+    });
+  }
+
+  disconnectThreadsConnection(connection: SocialConnection): void {
+    if (this.disconnectingConnectionIds.has(connection.id)) return;
+    const label = this.formatConnectionLabel(connection);
+    if (!confirm(`¿Desconectar el perfil Threads ${label}?`)) {
+      return;
+    }
+    this.disconnectingConnectionIds.add(connection.id);
+    this.metaConnect.disconnectThreadsConnection(connection.id).subscribe({
+      next: () => {
+        this.disconnectingConnectionIds.delete(connection.id);
+        this.refreshThreadsIntegration();
+        this.refreshEntitlements();
+      },
+      error: (err: unknown) => {
+        this.disconnectingConnectionIds.delete(connection.id);
+        alert(this.resolveThreadsConnectionError(err));
+      }
+    });
+  }
+
+  reauthThreadsConnection(connection: SocialConnection): void {
+    if (this.reauthingConnectionIds.has(connection.id)) return;
+    this.reauthingConnectionIds.add(connection.id);
+    this.metaConnect.reauthThreadsConnection(connection.id).subscribe({
+      error: (err: unknown) => {
+        this.reauthingConnectionIds.delete(connection.id);
+        alert(this.resolveThreadsConnectionError(err));
+      }
+    });
+  }
+
+  isThreadsFeatureEnabled(): boolean {
+    if (!this.entitlements) return true;
+    return isFeatureEnabled(this.entitlements.features, 'network.threads');
+  }
+
+  get threadsActiveAccounts(): MetaManagedAccount[] {
+    return this.threadsAccounts.filter((a) => a.isActive);
+  }
+
+  get threadsInactiveAccounts(): MetaManagedAccount[] {
+    return this.threadsAccounts.filter((a) => !a.isActive);
+  }
+
+  getThreadsConnectionCount(): number {
+    if (!this.threadsConnectionStatus) return 0;
+    return this.social.getConnectionCount(this.threadsConnectionStatus);
+  }
+
+  getMaxThreadsConnections(): number | undefined {
+    return this.threadsConnectionStatus?.maxConnectionsPerTenant;
+  }
+
+  getMaxThreadsAccounts(): number | undefined {
+    return this.threadsConnectionStatus?.maxThreadsAccounts;
+  }
+
+  hasThreadsOAuthConnections(): boolean {
+    if (!this.threadsConnectionStatus) return false;
+    return this.social.hasActiveConnections(this.threadsConnectionStatus);
+  }
+
+  getThreadsConnectionsBadgeLabel(): string {
+    const count = this.getThreadsConnectionCount();
+    const max = this.getMaxThreadsConnections();
+    if (max != null) {
+      return `${count} / ${max} conexiones OAuth`;
+    }
+    return count === 1 ? '1 conexión OAuth' : `${count} conexiones OAuth`;
+  }
+
+  getThreadsAccountsBadgeLabel(): string {
+    const status = this.threadsConnectionStatus;
+    const active = status?.activeThreadsAccounts ?? status?.activeAccounts ?? 0;
+    const max = this.getMaxThreadsAccounts();
+    if (max != null) {
+      return `${active} / ${max} perfiles activos`;
+    }
+    return active === 1 ? '1 perfil activo' : `${active} perfiles activos`;
+  }
+
+  canAddThreadsConnection(): boolean {
+    const status = this.threadsConnectionStatus;
+    if (!status?.allowMultipleConnectionsPerTenant) {
+      return !this.hasThreadsOAuthConnections();
+    }
+    const remainingConn = status.remainingConnections;
+    const remainingAccounts = status.remainingThreadsAccounts;
+    if (remainingConn != null && remainingConn <= 0) return false;
+    if (remainingAccounts != null && remainingAccounts <= 0) return false;
+    const max = status.maxConnectionsPerTenant;
+    const count = this.getThreadsConnectionCount();
+    if (max == null) return true;
+    return count < max;
+  }
+
+  getThreadsConnectionLabel(): string {
+    const status = this.threadsConnectionStatus;
+    const count = this.getThreadsConnectionCount();
+    if (count === 0) return 'No conectado';
+    if (status?.requiresReconnect) return `${count} perfil(es) · Reconectar`;
+    return count === 1 ? '1 perfil Threads' : `${count} perfiles Threads`;
+  }
+
+  isThreadsConnectionWarning(): boolean {
+    const status = this.threadsConnectionStatus;
+    if (!status?.connected) return false;
+    if (status.requiresReconnect) return true;
+    return (status.activeAccounts ?? 0) === 0;
+  }
+
+  isThreadsActivationAllowed(account: MetaManagedAccount): boolean {
+    if (account.isActive) return true;
+    if (!this.isThreadsFeatureEnabled()) return false;
+    if (this.isAccountTokenRevoked(account)) return false;
+    return account.canPublish && !account.requiresReconnect;
+  }
+
+  getThreadsActivationGateReason(account: MetaManagedAccount): string | null {
+    if (account.isActive) return null;
+    if (!this.isThreadsFeatureEnabled()) {
+      return 'Tu plan no permite Threads.';
+    }
+    if (this.isAccountTokenRevoked(account)) {
+      return 'Token revocado. Sincroniza Meta o reconecta Threads; PATCH isActive no restaura el token.';
+    }
+    if (account.requiresReconnect) {
+      return 'Reconecta la cuenta de Threads.';
+    }
+    if (!account.canPublish) {
+      return 'Esta cuenta no puede publicar hasta sincronizar o reconectar OAuth.';
+    }
+    return null;
+  }
+
+  getThreadsPublishHint(account: MetaManagedAccount): string | null {
+    if (account.isActive && !account.canPublish) {
+      if (this.isAccountTokenRevoked(account)) {
+        return 'Activa en tenant pero token revocado: no publicará hasta sincronizar o reconectar.';
+      }
+      return 'Activa pero sin token válido para publicar.';
+    }
+    if (!account.isActive && this.isAccountTokenRevoked(account)) {
+      return 'Esta cuenta no puede publicar ni sincronizar datos.';
+    }
+    return null;
+  }
+
+  updateThreadsAccountStatus(account: MetaManagedAccount, isActive: boolean): void {
+    if (this.updatingThreadsStatus.has(account.id) || account.isActive === isActive) {
+      return;
+    }
+    if (isActive && !this.isThreadsActivationAllowed(account)) {
+      alert(this.getThreadsActivationGateReason(account) || 'No puedes activar esta cuenta.');
+      return;
+    }
+    this.updatingThreadsStatus.add(account.id);
+    this.metaConnect.updateAccountStatus(account.id, isActive).subscribe({
+      next: (updated) => {
+        const idx = this.threadsAccounts.findIndex((a) => a.id === account.id);
+        if (idx !== -1) {
+          this.threadsAccounts[idx] = updated;
+        }
+        this.updatingThreadsStatus.delete(account.id);
+        this.refreshEntitlementsSilently();
+      },
+      error: (err: Error) => {
+        this.updatingThreadsStatus.delete(account.id);
+        alert(err.message || 'Error al actualizar la cuenta de Threads.');
+      }
+    });
+  }
+
+  isUpdatingThreadsStatus(accountId: number): boolean {
+    return this.updatingThreadsStatus.has(accountId);
+  }
+
+  reconnectThreadsAccount(account: MetaManagedAccount): void {
+    this.reconnectSocialAccount(account);
+  }
+
+  private resolveThreadsConnectionError(err: unknown): string {
+    if (isSocialApiError(err)) {
+      return getSocialThreadsConnectionErrorMessage(
+        err.code,
+        this.threadsConnectionStatus ?? undefined
+      );
+    }
+    if (err instanceof Error) {
+      return err.message;
+    }
+    return 'Error en la operación de conexión Threads.';
+  }
+
+  loadLinkedInStatus(): void {
+    this.social.getConnectionTypeStatus('linkedin', 'linkedin_oauth').subscribe({
+      next: (s) => {
+        this.linkedinConnectionStatus = s;
+        this.loadLinkedInConnections();
+      },
+      error: () => (this.linkedinConnectionStatus = null)
+    });
+  }
+
+  loadLinkedInConnections(): void {
+    this.loadingLinkedInConnections = true;
+    this.linkedInConnect.getLinkedInConnections().subscribe({
+      next: (connections) => {
+        this.linkedinConnections = connections;
+        this.loadingLinkedInConnections = false;
+      },
+      error: () => {
+        this.linkedinConnections = [];
+        this.loadingLinkedInConnections = false;
+      }
+    });
+  }
+
+  loadLinkedInOrganizations(): void {
+    this.loadingLinkedIn = true;
+    this.linkedinError = null;
+    this.social
+      .getAccounts({
+        providerGroup: 'linkedin',
+        provider: 'linkedin',
+        forPublishing: true,
+        includeBindings: true
+      })
+      .subscribe({
+        next: (accounts) => {
+          this.linkedinOrganizations = accounts;
+          this.loadingLinkedIn = false;
+        },
+        error: (err: Error) => {
+          this.linkedinError = err.message;
+          this.loadingLinkedIn = false;
+        }
+      });
+  }
+
+  refreshLinkedInIntegration(): void {
+    this.social.refreshLinkedInIntegrationBundle().subscribe({
+      next: (bundle) => {
+        this.linkedinConnectionStatus = bundle.status;
+        this.linkedinConnections = bundle.connections;
+        this.linkedinOrganizations = bundle.organizations;
+        this.loadingLinkedIn = false;
+        this.linkedinError = null;
+        this.loadingLinkedInConnections = false;
+      },
+      error: () => {
+        this.loadLinkedInStatus();
+        this.loadLinkedInConnections();
+        this.loadLinkedInOrganizations();
+      }
+    });
+  }
+
+  syncLinkedInConnection(connection: SocialConnection): void {
+    if (this.syncingConnectionIds.has(connection.id)) return;
+    this.syncingConnectionIds.add(connection.id);
+    this.linkedInConnect.syncLinkedInConnection(connection.id).subscribe({
+      next: () => {
+        this.syncingConnectionIds.delete(connection.id);
+        this.refreshLinkedInIntegration();
+        this.refreshEntitlementsSilently();
+      },
+      error: (err: unknown) => {
+        this.syncingConnectionIds.delete(connection.id);
+        alert(this.resolveLinkedInConnectionError(err));
+      }
+    });
+  }
+
+  disconnectLinkedInConnection(connection: SocialConnection): void {
+    if (this.disconnectingConnectionIds.has(connection.id)) return;
+    const label = this.formatConnectionLabel(connection);
+    if (!confirm(`¿Desconectar el miembro LinkedIn ${label}?`)) {
+      return;
+    }
+    this.disconnectingConnectionIds.add(connection.id);
+    this.linkedInConnect.disconnectLinkedInConnection(connection.id).subscribe({
+      next: () => {
+        this.disconnectingConnectionIds.delete(connection.id);
+        this.refreshLinkedInIntegration();
+        this.refreshEntitlementsSilently();
+      },
+      error: (err: unknown) => {
+        this.disconnectingConnectionIds.delete(connection.id);
+        alert(this.resolveLinkedInConnectionError(err));
+      }
+    });
+  }
+
+  reauthLinkedInConnection(connection: SocialConnection): void {
+    if (this.reauthingConnectionIds.has(connection.id)) return;
+    this.reauthingConnectionIds.add(connection.id);
+    this.linkedInConnect.reauthLinkedInConnection(connection.id).subscribe({
+      error: (err: unknown) => {
+        this.reauthingConnectionIds.delete(connection.id);
+        alert(this.resolveLinkedInConnectionError(err));
+      }
+    });
+  }
+
+  disconnectLinkedIn(): void {
+    if (this.disconnectingLinkedIn) return;
+    const count = this.getLinkedInConnectionCount();
+    if (
+      !confirm(
+        `¿Desconectar TODOS los miembros LinkedIn (${count})? Se revocarán todas las conexiones OAuth de LinkedIn en este espacio.`
+      )
+    ) {
+      return;
+    }
+    this.disconnectingLinkedIn = true;
+    this.linkedInConnect.disconnectAll().subscribe({
+      next: () => {
+        this.disconnectingLinkedIn = false;
+        this.refreshLinkedInIntegration();
+        this.refreshEntitlements();
+      },
+      error: (err: Error) => {
+        this.disconnectingLinkedIn = false;
+        alert(err.message || 'Error al desconectar LinkedIn.');
+      }
+    });
+  }
+
+  isLinkedInFeatureEnabled(): boolean {
+    if (!this.entitlements) return true;
+    return isFeatureEnabled(this.entitlements.features, 'network.linkedin');
+  }
+
+  get linkedinPublishableAccounts(): SocialAccount[] {
+    return this.linkedinOrganizations;
+  }
+
+  openLinkedInAccountSelector(connectionId: number): void {
+    this.router.navigate(['/dashboard/cuentas-conectadas/linkedin/select'], {
+      queryParams: { connectionId }
+    });
+  }
+
+  hasLinkedInDiscoveredAccounts(connection: SocialConnection): boolean {
+    return (connection.discoveredAccountCount ?? 0) > 0 || (connection.availableAccountCount ?? 0) > 0;
+  }
+
+  getLinkedInConnectionStatsLabel(connection: SocialConnection): string {
+    const connected = connection.activeAccountCount ?? 0;
+    const discovered = connection.discoveredAccountCount ?? 0;
+    const parts = [`${connected} conectada${connected === 1 ? '' : 's'}`];
+    if (discovered > 0) {
+      parts.push(`${discovered} pendiente${discovered === 1 ? '' : 's'}`);
+    }
+    parts.push(`Token ${this.getConnectionTokenLabel(connection)}`);
+    return parts.join(' · ');
+  }
+
+  getLinkedInAccountTypeLabel(account: SocialAccount): string {
+    return account.accountType === 'profile' ? 'Perfil personal' : 'Página de empresa';
+  }
+
+  disconnectLinkedInAccount(account: SocialAccount): void {
+    if (this.disconnectingLinkedInAccountIds.has(account.id)) return;
+    const connectionId = this.resolveSocialConnectionId(account);
+    if (connectionId == null) {
+      alert('No se encontró la conexión LinkedIn para esta cuenta.');
+      return;
+    }
+    const label = account.displayName || 'esta cuenta';
+    if (!confirm(`¿Desconectar «${label}» del workspace?`)) {
+      return;
+    }
+    this.disconnectingLinkedInAccountIds.add(account.id);
+    this.social.disconnectAccountFromWorkspace(account.id, connectionId).subscribe({
+      next: () => {
+        this.disconnectingLinkedInAccountIds.delete(account.id);
+        this.linkedinOrganizations = this.linkedinOrganizations.filter((a) => a.id !== account.id);
+        this.refreshLinkedInIntegration();
+        this.refreshEntitlementsSilently();
+      },
+      error: (err: unknown) => {
+        this.disconnectingLinkedInAccountIds.delete(account.id);
+        alert(this.resolveLinkedInConnectionError(err));
+      }
+    });
+  }
+
+  isDisconnectingLinkedInAccount(accountId: number): boolean {
+    return this.disconnectingLinkedInAccountIds.has(accountId);
+  }
+
+  get linkedinActiveOrganizations(): SocialAccount[] {
+    return this.linkedinOrganizations;
+  }
+
+  get linkedinInactiveOrganizations(): SocialAccount[] {
+    return [];
+  }
+
+  getLinkedInConnectionCount(): number {
+    if (!this.linkedinConnectionStatus) return 0;
+    return this.social.getConnectionCount(this.linkedinConnectionStatus);
+  }
+
+  getMaxLinkedInConnections(): number | undefined {
+    return this.linkedinConnectionStatus?.maxConnectionsPerTenant;
+  }
+
+  getMaxLinkedInOrganizations(): number | undefined {
+    return this.linkedinConnectionStatus?.maxLinkedInOrganizations;
+  }
+
+  hasLinkedInOAuthConnections(): boolean {
+    if (!this.linkedinConnectionStatus) return false;
+    return this.social.hasActiveConnections(this.linkedinConnectionStatus);
+  }
+
+  getLinkedInConnectionsBadgeLabel(): string {
+    const count = this.getLinkedInConnectionCount();
+    const max = this.getMaxLinkedInConnections();
+    if (max != null) {
+      return `${count} / ${max} miembros OAuth`;
+    }
+    return count === 1 ? '1 miembro OAuth' : `${count} miembros OAuth`;
+  }
+
+  getLinkedInOrganizationsBadgeLabel(): string {
+    const status = this.linkedinConnectionStatus;
+    const active = status?.activeLinkedInOrganizations ?? status?.activeAccounts ?? 0;
+    const max = this.getMaxLinkedInOrganizations();
+    if (max != null) {
+      return `${active} / ${max} organizaciones activas`;
+    }
+    return active === 1 ? '1 organización activa' : `${active} organizaciones activas`;
+  }
+
+  canAddLinkedInConnection(): boolean {
+    const status = this.linkedinConnectionStatus;
+    if (!status?.allowMultipleConnectionsPerTenant) {
+      return !this.hasLinkedInOAuthConnections();
+    }
+    const remainingConn = status.remainingConnections;
+    const remainingOrgs = status.remainingLinkedInOrganizations;
+    if (remainingConn != null && remainingConn <= 0) return false;
+    if (remainingOrgs != null && remainingOrgs <= 0) return false;
+    const max = status.maxConnectionsPerTenant;
+    const count = this.getLinkedInConnectionCount();
+    if (max == null) return true;
+    return count < max;
+  }
+
+  getLinkedInConnectionLabel(): string {
+    const status = this.linkedinConnectionStatus;
+    const count = this.getLinkedInConnectionCount();
+    if (count === 0) return 'No conectado';
+    if (status?.requiresReconnect) return `${count} miembro(s) · Reconectar`;
+    return count === 1 ? '1 miembro LinkedIn' : `${count} miembros LinkedIn`;
+  }
+
+  isLinkedInConnectionWarning(): boolean {
+    const status = this.linkedinConnectionStatus;
+    if (!status?.connected) return false;
+    if (status.requiresReconnect) return true;
+    return (status.activeAccounts ?? 0) === 0;
+  }
+
+  getLinkedInStatusWarning(): string | null {
+    const status = this.linkedinConnectionStatus;
+    if (!status?.warningMessage && !status?.warningCode) return null;
+    if (status.warningMessage) return status.warningMessage;
+    return getSocialLinkedInConnectionErrorMessage(status.warningCode ?? undefined, status);
+  }
+
+  getSharedLinkedInBindingsCount(account: SocialAccount): number {
+    return account.connectionBindings?.filter((b) => b.isActive).length ?? 0;
+  }
+
+  hasSharedLinkedInBindings(account: SocialAccount): boolean {
+    return this.getSharedLinkedInBindingsCount(account) > 1;
+  }
+
+  getLinkedInBindingMemberLabels(account: SocialAccount): string {
+    const bindings = account.connectionBindings?.filter((b) => b.isActive) ?? [];
+    return bindings
+      .map((b) => {
+        const conn = this.linkedinConnections.find((c) => c.id === b.socialConnectionId);
+        return conn ? this.formatConnectionLabel(conn) : `Miembro #${b.socialConnectionId}`;
+      })
+      .join(', ');
+  }
+
+  private resolveLinkedInConnectionError(err: unknown): string {
+    if (isSocialApiError(err)) {
+      return getSocialLinkedInConnectionErrorMessage(
+        err.code,
+        this.linkedinConnectionStatus ?? undefined
+      );
+    }
+    if (err instanceof Error) {
+      return err.message;
+    }
+    return 'Error en la operación de conexión LinkedIn.';
+  }
+
   loadFacebookConnections(): void {
     this.loadingFacebookConnections = true;
     this.metaConnect.getFacebookConnections().subscribe({
@@ -650,6 +1338,7 @@ export class CuentasConectadasComponent implements OnInit {
       },
       error: () => (this.instagramConnectionStatus = null)
     });
+    this.loadThreadsStatus();
   }
 
   loadInstagramAccounts(): void {
@@ -763,6 +1452,10 @@ export class CuentasConectadasComponent implements OnInit {
       this.facebookAccountByExternalId.delete(account.externalAccountId);
     } else if (account.provider === 'instagram') {
       this.instagramAccounts = this.instagramAccounts.filter((a) => a.id !== account.id);
+    } else if (account.provider === 'threads') {
+      this.threadsAccounts = this.threadsAccounts.filter((a) => a.id !== account.id);
+    } else if (account.provider === 'linkedin') {
+      this.linkedinOrganizations = this.linkedinOrganizations.filter((a) => a.id !== account.id);
     }
   }
 
@@ -869,6 +1562,21 @@ export class CuentasConectadasComponent implements OnInit {
       if (index !== -1) {
         this.instagramAccounts[index] = updated as MetaManagedAccount;
       }
+    } else if (updated.provider === 'threads') {
+      const index = this.threadsAccounts.findIndex((a) => a.id === updated.id);
+      if (index !== -1) {
+        this.threadsAccounts[index] = updated as MetaManagedAccount;
+      }
+    } else if (updated.provider === 'linkedin') {
+      const index = this.linkedinOrganizations.findIndex((a) => a.id === updated.id);
+      if (index !== -1) {
+        this.linkedinOrganizations[index] = updated;
+      }
+    }
+
+    if (updated.provider === 'linkedin') {
+      this.refreshLinkedInIntegration();
+      return;
     }
 
     this.social.pollMetaIntegrationReady().subscribe({
@@ -995,13 +1703,16 @@ export class CuentasConectadasComponent implements OnInit {
     });
   }
 
-  disconnectMeta(connectionType: 'facebook_login' | 'instagram_login'): void {
+  disconnectMeta(connectionType: 'facebook_login' | 'instagram_login' | 'threads_login'): void {
     if (this.disconnectingMeta) return;
     const isFacebook = connectionType === 'facebook_login';
-    const label = isFacebook ? 'Facebook' : 'Instagram';
+    const isThreads = connectionType === 'threads_login';
+    const label = isFacebook ? 'Facebook' : isThreads ? 'Threads' : 'Instagram';
     const confirmMsg = isFacebook
       ? `¿Desconectar TODAS las cuentas Meta (${this.getFacebookConnectionCount()})? Se revocarán todas las conexiones OAuth de Facebook en este espacio.`
-      : `¿Desconectar TODAS las cuentas Instagram (${this.getInstagramConnectionCount()})? Se revocarán todas las conexiones OAuth de Instagram en este espacio.`;
+      : isThreads
+        ? `¿Desconectar TODOS los perfiles Threads (${this.getThreadsConnectionCount()})? Se revocarán todas las conexiones OAuth de Threads en este espacio.`
+        : `¿Desconectar TODAS las cuentas Instagram (${this.getInstagramConnectionCount()})? Se revocarán todas las conexiones OAuth de Instagram en este espacio.`;
     if (!confirm(confirmMsg)) {
       return;
     }
@@ -1011,6 +1722,8 @@ export class CuentasConectadasComponent implements OnInit {
         this.disconnectingMeta = null;
         if (isFacebook) {
           this.refreshFacebookIntegration();
+        } else if (isThreads) {
+          this.refreshThreadsIntegration();
         } else {
           this.refreshInstagramIntegration();
         }
